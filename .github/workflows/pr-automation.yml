@@ -1,0 +1,167 @@
+name: PR Automation
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  label:
+    name: Auto Label
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Label based on changed files
+        uses: actions/labeler@v5
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          configuration-path: .github/labeler.yml
+
+  size:
+    name: PR Size Label
+    runs-on: ubuntu-latest
+    steps:
+      - name: Size label
+        uses: codelytv/pr-size-labeler@v1
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          xs_label: 'size/xs'
+          xs_max_size: 10
+          s_label: 'size/s'
+          s_max_size: 100
+          m_label: 'size/m'
+          m_max_size: 500
+          l_label: 'size/l'
+          l_max_size: 1000
+          xl_label: 'size/xl'
+
+  conventional-commit:
+    name: Check Conventional Commits
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check commits
+        uses: wagoid/commitlint-github-action@v5
+        with:
+          configFile: .commitlintrc.json
+
+  title-check:
+    name: Check PR Title
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR title
+        uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            docs
+            style
+            refactor
+            perf
+            test
+            build
+            ci
+            chore
+            revert
+          requireScope: false
+
+  comment:
+    name: PR Comment
+    runs-on: ubuntu-latest
+    if: github.event.action == 'opened'
+    steps:
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = `Thanks for opening this PR!
+
+            ## Checklist
+
+            Before merging, please ensure:
+            - [ ] All CI checks pass
+            - [ ] Code has been reviewed
+            - [ ] Tests have been added/updated
+            - [ ] Documentation has been updated (if needed)
+            - [ ] Changelog has been updated (for user-facing changes)
+
+            ## Review Process
+
+            1. Automated checks will run on your PR
+            2. A maintainer will review your changes
+            3. Address any feedback
+            4. Once approved, your PR will be merged
+
+            ## Resources
+
+            - [Contributing Guide](https://github.com/b-harvest/cosmos-operator/blob/main/CONTRIBUTING.md)
+            - [Development Setup](https://github.com/b-harvest/cosmos-operator/blob/main/docs/development.md)
+            `;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+  benchmark:
+    name: Performance Benchmark
+    runs-on: ubuntu-latest
+    if: contains(github.event.pull_request.labels.*.name, 'performance')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Run benchmarks
+        run: |
+          go test -bench=. -benchmem -run=^$ ./... | tee benchmark.txt
+
+      - name: Comment benchmark results
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const benchmark = fs.readFileSync('benchmark.txt', 'utf8');
+
+            const body = `## Benchmark Results
+
+            \`\`\`
+            ${benchmark}
+            \`\`\`
+            `;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+  assign-reviewers:
+    name: Auto Assign Reviewers
+    runs-on: ubuntu-latest
+    if: github.event.action == 'opened'
+    steps:
+      - name: Assign reviewers
+        uses: kentaro-m/auto-assign-action@v1.2.5
+        with:
+          configuration-path: .github/auto-assign.yml

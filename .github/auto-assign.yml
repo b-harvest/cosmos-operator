@@ -1,0 +1,25 @@
+# Auto-assign reviewers configuration
+
+# Set to true to add reviewers to PRs
+addReviewers: true
+
+# Set to true to add assignees to PRs
+addAssignees: false
+
+# Number of reviewers to add
+numberOfReviewers: 2
+
+# Reviewers to randomly pick from
+reviewers:
+  - # Add your team members here
+  # - username1
+  # - username2
+
+# Keywords in PR title/body that skip auto-assignment
+skipKeywords:
+  - wip
+  - WIP
+  - draft
+
+# Only assign reviewers when PR is ready
+runOnDraft: false

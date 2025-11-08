@@ -1,4 +1,45 @@
-# More info: https://docs.docker.com/engine/reference/builder/#dockerignore-file
-# Ignore build and test binaries.
+# Build artifacts
 bin/
 testbin/
+*.test
+*.out
+manager
+
+# Git
+.git/
+.gitignore
+
+# CI/CD
+.github/
+
+# Documentation
+*.md
+docs/
+
+# Config files
+.golangci.yml
+.dockerignore
+Dockerfile*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test coverage
+coverage.html
+coverage.out
+*.coverprofile
+
+# Helm charts (if building operator only)
+charts/
+
+# Examples
+examples/
+config/samples/

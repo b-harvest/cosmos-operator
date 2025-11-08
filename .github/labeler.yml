@@ -1,0 +1,53 @@
+# Auto-labeler configuration
+
+'area/api':
+  - changed-files:
+    - any-glob-to-any-file: 'api/**/*'
+
+'area/controllers':
+  - changed-files:
+    - any-glob-to-any-file: 'controllers/**/*'
+
+'area/internal':
+  - changed-files:
+    - any-glob-to-any-file: 'internal/**/*'
+
+'area/docs':
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'docs/**/*'
+      - '*.md'
+      - 'README*'
+
+'area/ci':
+  - changed-files:
+    - any-glob-to-any-file:
+      - '.github/**/*'
+      - '.golangci.yml'
+      - 'Makefile'
+
+'area/docker':
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'Dockerfile*'
+      - '.dockerignore'
+
+'area/helm':
+  - changed-files:
+    - any-glob-to-any-file: 'charts/**/*'
+
+'area/tests':
+  - changed-files:
+    - any-glob-to-any-file: '**/*_test.go'
+
+'dependencies':
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'go.mod'
+      - 'go.sum'
+
+'breaking-change':
+  - head-branch: ['^breaking/', 'breaking']
+
+'security':
+  - head-branch: ['^security/', 'security']
