@@ -110,7 +110,8 @@ func BuildServices(crd *cosmosv1.CosmosFullNode) []diff.Resource[*corev1.Service
 			// therefore, you should allow this option.
 			svc.Spec.PublishNotReadyAddresses = true
 
-			svcs[i] = diff.Adapt(&svc, i)
+			// Append sentry services after p2p services
+			svcs[crd.Spec.Replicas+i] = diff.Adapt(&svc, int(crd.Spec.Replicas+i))
 		}
 	}
 

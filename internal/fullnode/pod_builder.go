@@ -365,6 +365,7 @@ echo "Initializing into tmp dir for downstream processing..."
 	}
 }
 
+// nolint:unused // Reserved for future Namada support
 func getNamadaChainInitContainer(env []corev1.EnvVar, tpl cosmosv1.PodSpec) corev1.Container {
 	return corev1.Container{
 		Name:    chainInitContainer,
@@ -599,7 +600,7 @@ func PVCName(pod *corev1.Pod) string {
 	return found.PersistentVolumeClaim.ClaimName
 }
 
-const PRUNING_POD_IMAGE_DEFAULT = "ghcr.io/bharvest-devops/cosmos-pruner:latest"
+const pruningPodImageDefault = "ghcr.io/bharvest-devops/cosmos-pruner:latest"
 
 func (p *PrunerPod) BuildPruningContainer(crd *cosmosv1.CosmosFullNode) *corev1.Pod {
 	if p == nil {
@@ -615,7 +616,7 @@ func (p *PrunerPod) BuildPruningContainer(crd *cosmosv1.CosmosFullNode) *corev1.
 		probes         = podReadinessProbes(crd)
 	)
 	if pruningImage == "" {
-		pruningImage = PRUNING_POD_IMAGE_DEFAULT
+		pruningImage = pruningPodImageDefault
 	}
 	if pruningCommand == "" {
 		pruningCommand = "cosmos-pruner compact /home/operator/cosmos/data/ 2>&1"
