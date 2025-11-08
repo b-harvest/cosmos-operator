@@ -5624,6 +5624,21 @@ spec:
                     required:
                     - threshold
                     type: object
+                  pruningSpec:
+                    description: Automatically prune blockchain data to manage disk
+                      usage.
+                    properties:
+                      image:
+                        description: |-
+                          Docker image for the pruning pod.
+                          If not specified, defaults to "ghcr.io/bharvest-devops/cosmos-pruner:latest".
+                        type: string
+                      pruningCommand:
+                        description: |-
+                          Command to execute for pruning.
+                          If not specified, defaults to "cosmos-pruner compact /home/operator/cosmos/data/ 2>&1".
+                        type: string
+                    type: object
                   pvcAutoScale:
                     description: |-
                       Automatically increases PVC storage as they approach capacity.
