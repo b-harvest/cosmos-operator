@@ -68,7 +68,8 @@ func NewPodBuilder(crd *cosmosv1.CosmosFullNode) PodBuilder {
 			Annotations: make(map[string]string),
 		},
 		Spec: corev1.PodSpec{
-			ServiceAccountName: serviceAccountName(crd),
+			ServiceAccountName:    serviceAccountName(crd),
+			ShareProcessNamespace: ptr(false),
 			SecurityContext: &corev1.PodSecurityContext{
 				FSGroup:             ptr(int64(1025)),
 				FSGroupChangePolicy: ptr(corev1.FSGroupChangeOnRootMismatch),
