@@ -4,6 +4,10 @@ set -eu
 
 GENESIS_URL="$1"
 
+# Ensure the config directory exists
+echo "Ensuring config directory exists: $CONFIG_DIR"
+mkdir -p "$CONFIG_DIR"
+
 echo "Downloading genesis file $GENESIS_URL to $GENESIS_FILE..."
 
 download_json() {

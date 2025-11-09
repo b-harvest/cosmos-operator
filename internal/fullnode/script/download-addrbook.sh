@@ -4,6 +4,10 @@ set -eu
 
 ADDRBOOK_URL="$1"
 
+# Ensure the config directory exists
+echo "Ensuring config directory exists: $CONFIG_DIR"
+mkdir -p "$CONFIG_DIR"
+
 echo "Downloading address book file $ADDRBOOK_URL to $ADDRBOOK_FILE..."
 
 download_json() {
