@@ -92,10 +92,12 @@ func NewPodBuilder(crd *cosmosv1.CosmosFullNode) PodBuilder {
 					ImagePullPolicy: tpl.ImagePullPolicy,
 					WorkingDir:      workDir,
 					SecurityContext: &corev1.SecurityContext{
-						RunAsUser:                ptr(int64(1025)),
-						RunAsGroup:               ptr(int64(1025)),
-						RunAsNonRoot:             ptr(true),
-						AllowPrivilegeEscalation: ptr(false),
+						RunAsUser:    ptr(int64(1025)),
+						RunAsGroup:   ptr(int64(1025)),
+						RunAsNonRoot: ptr(true),
+						Capabilities: &corev1.Capabilities{
+							Add: []corev1.Capability{"SYS_PTRACE"},
+						},
 					},
 				},
 				// healthcheck sidecar
@@ -115,10 +117,12 @@ func NewPodBuilder(crd *cosmosv1.CosmosFullNode) PodBuilder {
 					ReadinessProbe:  probes[1],
 					ImagePullPolicy: tpl.ImagePullPolicy,
 					SecurityContext: &corev1.SecurityContext{
-						RunAsUser:                ptr(int64(1025)),
-						RunAsGroup:               ptr(int64(1025)),
-						RunAsNonRoot:             ptr(true),
-						AllowPrivilegeEscalation: ptr(false),
+						RunAsUser:    ptr(int64(1025)),
+						RunAsGroup:   ptr(int64(1025)),
+						RunAsNonRoot: ptr(true),
+						Capabilities: &corev1.Capabilities{
+							Add: []corev1.Capability{"SYS_PTRACE"},
+						},
 					},
 				},
 			},
@@ -141,10 +145,12 @@ func NewPodBuilder(crd *cosmosv1.CosmosFullNode) PodBuilder {
 			ImagePullPolicy: tpl.ImagePullPolicy,
 			WorkingDir:      workDir,
 			SecurityContext: &corev1.SecurityContext{
-				RunAsUser:                ptr(int64(1025)),
-				RunAsGroup:               ptr(int64(1025)),
-				RunAsNonRoot:             ptr(true),
-				AllowPrivilegeEscalation: ptr(false),
+				RunAsUser:    ptr(int64(1025)),
+				RunAsGroup:   ptr(int64(1025)),
+				RunAsNonRoot: ptr(true),
+				Capabilities: &corev1.Capabilities{
+					Add: []corev1.Capability{"SYS_PTRACE"},
+				},
 			},
 		})
 	}
