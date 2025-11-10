@@ -153,7 +153,7 @@ func (r *StuckHeightRecoveryReconciler) handleMonitoring(
 	ctx context.Context,
 	recovery *cosmosv1.StuckHeightRecovery,
 	crd *cosmosv1.CosmosFullNode,
-	reporter *kube.EventReporter,
+	reporter kube.EventReporter,
 ) (ctrl.Result, error) {
 	// Check if height is stuck
 	isStuck, stuckPodName, currentHeight, err := r.heightMonitor.CheckStuckHeight(ctx, crd, recovery)
@@ -202,7 +202,7 @@ func (r *StuckHeightRecoveryReconciler) handleHeightStuck(
 	ctx context.Context,
 	recovery *cosmosv1.StuckHeightRecovery,
 	crd *cosmosv1.CosmosFullNode,
-	reporter *kube.EventReporter,
+	reporter kube.EventReporter,
 ) (ctrl.Result, error) {
 	// Check rate limit
 	canAttempt, message, err := r.rateLimiter.CanAttemptRecovery(recovery)
@@ -212,7 +212,7 @@ func (r *StuckHeightRecoveryReconciler) handleHeightStuck(
 	}
 
 	if !canAttempt {
-		reporter.RecordWarning("RateLimited", message)
+		reporter.RecordInfo("RateLimited", message)
 		recovery.Status.Phase = cosmosv1.StuckHeightRecoveryPhaseRateLimited
 		recovery.Status.Message = message
 		if err := r.Status().Update(ctx, recovery); err != nil {
@@ -245,7 +245,7 @@ func (r *StuckHeightRecoveryReconciler) handleHeightStuck(
 func (r *StuckHeightRecoveryReconciler) handleCreatingSnapshot(
 	ctx context.Context,
 	recovery *cosmosv1.StuckHeightRecovery,
-	reporter *kube.EventReporter,
+	reporter kube.EventReporter,
 ) (ctrl.Result, error) {
 	// Get PVC for the stuck pod
 	pvcName, err := r.snapshotCreator.GetPVCForPod(ctx, recovery.Namespace, recovery.Status.StuckPodName)
@@ -284,7 +284,7 @@ func (r *StuckHeightRecoveryReconciler) handleCreatingSnapshot(
 func (r *StuckHeightRecoveryReconciler) handleWaitingForSnapshot(
 	ctx context.Context,
 	recovery *cosmosv1.StuckHeightRecovery,
-	reporter *kube.EventReporter,
+	reporter kube.EventReporter,
 ) (ctrl.Result, error) {
 	ready, err := r.snapshotCreator.CheckSnapshotReady(ctx, recovery.Namespace, recovery.Status.VolumeSnapshotName)
 	if err != nil {
@@ -314,7 +314,7 @@ func (r *StuckHeightRecoveryReconciler) handleRunningRecovery(
 	ctx context.Context,
 	recovery *cosmosv1.StuckHeightRecovery,
 	crd *cosmosv1.CosmosFullNode,
-	reporter *kube.EventReporter,
+	reporter kube.EventReporter,
 ) (ctrl.Result, error) {
 	// Get PVC for the stuck pod
 	pvcName, err := r.snapshotCreator.GetPVCForPod(ctx, recovery.Namespace, recovery.Status.StuckPodName)
@@ -359,7 +359,7 @@ func (r *StuckHeightRecoveryReconciler) handleRunningRecovery(
 func (r *StuckHeightRecoveryReconciler) handleWaitingForRecovery(
 	ctx context.Context,
 	recovery *cosmosv1.StuckHeightRecovery,
-	reporter *kube.EventReporter,
+	reporter kube.EventReporter,
 ) (ctrl.Result, error) {
 	completed, success, err := r.recoveryPodBuilder.CheckPodComplete(ctx, recovery.Namespace, recovery.Status.RecoveryPodName)
 	if err != nil {
@@ -393,7 +393,7 @@ func (r *StuckHeightRecoveryReconciler) handleWaitingForRecovery(
 func (r *StuckHeightRecoveryReconciler) handleRecoveryComplete(
 	ctx context.Context,
 	recovery *cosmosv1.StuckHeightRecovery,
-	reporter *kube.EventReporter,
+	reporter kube.EventReporter,
 ) (ctrl.Result, error) {
 	// Go back to monitoring
 	reporter.Info("Returning to monitoring mode")
@@ -413,7 +413,7 @@ func (r *StuckHeightRecoveryReconciler) handleRecoveryComplete(
 func (r *StuckHeightRecoveryReconciler) handleRecoveryFailed(
 	ctx context.Context,
 	recovery *cosmosv1.StuckHeightRecovery,
-	reporter *kube.EventReporter,
+	reporter kube.EventReporter,
 ) (ctrl.Result, error) {
 	// Wait before retrying
 	reporter.Info("Recovery failed, will retry monitoring")
@@ -433,7 +433,7 @@ func (r *StuckHeightRecoveryReconciler) handleRateLimited(
 	ctx context.Context,
 	recovery *cosmosv1.StuckHeightRecovery,
 	crd *cosmosv1.CosmosFullNode,
-	reporter *kube.EventReporter,
+	reporter kube.EventReporter,
 ) (ctrl.Result, error) {
 	// Check if we can retry now
 	canAttempt, message, err := r.rateLimiter.CanAttemptRecovery(recovery)
