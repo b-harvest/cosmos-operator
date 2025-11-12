@@ -541,7 +541,13 @@ func initContainers(crd *cosmosv1.CosmosFullNode, moniker string) []corev1.Conta
 		Env:             env,
 		ImagePullPolicy: tpl.ImagePullPolicy,
 		WorkingDir:      workDir,
-		SecurityContext: &corev1.SecurityContext{},
+		SecurityContext: &corev1.SecurityContext{
+			RunAsUser:                ptr(int64(1025)),
+			RunAsGroup:               ptr(int64(1025)),
+			RunAsNonRoot:             ptr(true),
+			AllowPrivilegeEscalation: &allowPrivilege,
+			Privileged:               &allowPrivilege,
+		},
 	})
 
 	return required
