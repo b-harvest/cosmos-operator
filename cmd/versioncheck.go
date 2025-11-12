@@ -152,7 +152,7 @@ func checkVersion(
 	}
 	store := rootmulti.NewStore(db, log.NewNopLogger(), nil)
 
-	height := store.LatestVersion() + 1
+	height := store.LatestVersion()
 	db.Close()
 
 	if crd == nil {
