@@ -16,6 +16,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+const revisionLabel = "app.kubernetes.io/revision"
+
 // PVCControl reconciles volumes for a CosmosFullNode.
 // Unlike StatefulSet, PVCControl will update volumes by deleting and recreating volumes.
 type PVCControl struct {
@@ -103,7 +105,41 @@ func (control PVCControl) Reconcile(ctx context.Context, reporter kube.Reporter,
 
 	var deletes int
 	if !control.shouldRetain(crd) {
+		// Check if any pods are using PVCs before deletion
+		var pods corev1.PodList
+		if err := control.client.List(ctx, &pods,
+			client.InNamespace(crd.Namespace),
+			client.MatchingFields{kube.ControllerOwnerField: crd.Name},
+		); err != nil {
+			return false, kube.TransientError(fmt.Errorf("list existing pods: %w", err))
+		}
+
 		for _, pvc := range diffed.Deletes() {
+			// Check if any pod is using this PVC
+			pvcInUse := false
+			for _, pod := range pods.Items {
+				if pod.DeletionTimestamp != nil {
+					// Pod is being deleted, wait for it
+					pvcInUse = true
+					break
+				}
+				for _, vol := range pod.Spec.Volumes {
+					if vol.PersistentVolumeClaim != nil && vol.PersistentVolumeClaim.ClaimName == pvc.Name {
+						pvcInUse = true
+						break
+					}
+				}
+				if pvcInUse {
+					break
+				}
+			}
+
+			if pvcInUse {
+				reporter.Info("PVC in use by pod, waiting for pod deletion", "name", pvc.Name)
+				// Requeue to wait for pod deletion
+				return true, nil
+			}
+
 			reporter.Info("Deleting pvc", "name", pvc.Name)
 			if err := control.client.Delete(ctx, pvc, client.PropagationPolicy(metav1.DeletePropagationForeground)); client.IgnoreNotFound(err) != nil {
 				return true, kube.TransientError(fmt.Errorf("delete pvc %q: %w", pvc.Name, err))
