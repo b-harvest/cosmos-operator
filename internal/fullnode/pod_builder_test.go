@@ -717,6 +717,70 @@ HOME="$CHAIN_HOME" gaiad start --home /home/operator/cosmos`
 		require.Equal(t, "new-init", pod2.Spec.InitContainers[2].Name)
 		require.Equal(t, "new-init:latest", pod2.Spec.InitContainers[2].Image)
 	})
+
+	t.Run("version selection with halt-height", func(t *testing.T) {
+		crd := defaultCRD()
+		crd.Spec.ChainSpec.Versions = []cosmosv1.ChainVersion{
+			{UpgradeHeight: 1000, Image: "v1.0.0"},
+			{UpgradeHeight: 2000, Image: "v2.0.0", SetHaltHeight: true},
+			{UpgradeHeight: 3000, Image: "v3.0.0"},
+		}
+
+		t.Run("before halt-height", func(t *testing.T) {
+			custom := crd.DeepCopy()
+			custom.Status.Height = map[string]uint64{"osmosis-0": 1500}
+
+			pod, err := NewPodBuilder(custom).WithOrdinal(0).Build()
+			require.NoError(t, err)
+
+			// Should use v1.0.0 (height 1000)
+			require.Equal(t, "v1.0.0", pod.Spec.Containers[0].Image)
+		})
+
+		t.Run("at halt-height minus 1", func(t *testing.T) {
+			custom := crd.DeepCopy()
+			custom.Status.Height = map[string]uint64{"osmosis-0": 1999}
+
+			pod, err := NewPodBuilder(custom).WithOrdinal(0).Build()
+			require.NoError(t, err)
+
+			// Should use v2.0.0 because halt-height is at 2000 (currentHeight + 1)
+			require.Equal(t, "v2.0.0", pod.Spec.Containers[0].Image)
+		})
+
+		t.Run("at halt-height", func(t *testing.T) {
+			custom := crd.DeepCopy()
+			custom.Status.Height = map[string]uint64{"osmosis-0": 2000}
+
+			pod, err := NewPodBuilder(custom).WithOrdinal(0).Build()
+			require.NoError(t, err)
+
+			// Should use v2.0.0
+			require.Equal(t, "v2.0.0", pod.Spec.Containers[0].Image)
+		})
+
+		t.Run("after halt-height", func(t *testing.T) {
+			custom := crd.DeepCopy()
+			custom.Status.Height = map[string]uint64{"osmosis-0": 2500}
+
+			pod, err := NewPodBuilder(custom).WithOrdinal(0).Build()
+			require.NoError(t, err)
+
+			// Should use v2.0.0 (height 2000)
+			require.Equal(t, "v2.0.0", pod.Spec.Containers[0].Image)
+		})
+
+		t.Run("upgrade without halt-height", func(t *testing.T) {
+			custom := crd.DeepCopy()
+			custom.Status.Height = map[string]uint64{"osmosis-0": 2999}
+
+			pod, err := NewPodBuilder(custom).WithOrdinal(0).Build()
+			require.NoError(t, err)
+
+			// Should use v2.0.0, NOT v3.0.0 (because SetHaltHeight is false for v3.0.0)
+			require.Equal(t, "v2.0.0", pod.Spec.Containers[0].Image)
+		})
+	})
 }
 
 func TestChainHomeDir(t *testing.T) {

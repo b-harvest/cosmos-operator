@@ -210,6 +210,9 @@ func podReadinessProbes(crd *cosmosv1.CosmosFullNode) []*corev1.Probe {
 
 // findVersion returns the appropriate ChainVersion based on the current height.
 // It finds the version with the highest UpgradeHeight that is <= currentHeight.
+// Special case: if the next version has SetHaltHeight=true and is at currentHeight+1,
+// select that version instead. This handles the case where the chain halts at halt-height,
+// but the database only records up to halt-height-1.
 func findVersion(versions []cosmosv1.ChainVersion, currentHeight uint64) *cosmosv1.ChainVersion {
 	var selected *cosmosv1.ChainVersion
 	for i := range versions {
@@ -220,6 +223,17 @@ func findVersion(versions []cosmosv1.ChainVersion, currentHeight uint64) *cosmos
 			}
 		}
 	}
+
+	// Check if the next version is at currentHeight + 1 with SetHaltHeight enabled
+	// This ensures we use the correct image when the chain halts just before an upgrade
+	for i := range versions {
+		v := &versions[i]
+		if v.UpgradeHeight == currentHeight+1 && v.SetHaltHeight {
+			selected = v
+			break
+		}
+	}
+
 	return selected
 }
 
