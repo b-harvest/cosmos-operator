@@ -71,8 +71,14 @@ func NewPodBuilder(crd *cosmosv1.CosmosFullNode) PodBuilder {
 			ServiceAccountName:    serviceAccountName(crd),
 			ShareProcessNamespace: ptr(false),
 			SecurityContext: &corev1.PodSecurityContext{
+				RunAsUser:           ptr(int64(1025)),
+				RunAsGroup:          ptr(int64(1025)),
 				FSGroup:             ptr(int64(1025)),
 				FSGroupChangePolicy: ptr(corev1.FSGroupChangeOnRootMismatch),
+				RunAsNonRoot:        ptr(true),
+				SeccompProfile: &corev1.SeccompProfile{
+					Type: corev1.SeccompProfileTypeRuntimeDefault,
+				},
 			},
 			Subdomain: crd.Name,
 			Containers: []corev1.Container{
@@ -386,7 +392,7 @@ echo "Initializing into tmp dir for downstream processing..."
 	}
 }
 
-// nolint:unused // Reserved for future Namada support
+//nolint:unused // Reserved for future Namada support
 func getNamadaChainInitContainer(env []corev1.EnvVar, tpl cosmosv1.PodSpec) corev1.Container {
 	return corev1.Container{
 		Name:    chainInitContainer,
