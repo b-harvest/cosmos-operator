@@ -45,17 +45,14 @@ func BuildConfigMaps(crd *cosmosv1.CosmosFullNode, peers Peers) ([]diff.Resource
 				instanceHeight = height
 			}
 			haltHeight := uint64(0)
-			for i, v := range crd.Spec.ChainSpec.Versions {
-				if v.SetHaltHeight {
-					haltHeight = v.UpgradeHeight
-				} else {
-					haltHeight = 0
-				}
+			// Find the next upgrade height that is greater than the current instance height
+			for _, v := range crd.Spec.ChainSpec.Versions {
 				if instanceHeight < v.UpgradeHeight {
+					// Set halt height only if SetHaltHeight is true for the next upgrade
+					if v.SetHaltHeight {
+						haltHeight = v.UpgradeHeight
+					}
 					break
-				}
-				if i == len(crd.Spec.ChainSpec.Versions)-1 {
-					haltHeight = 0
 				}
 			}
 			appCfg.HaltHeight = ptr(haltHeight)
