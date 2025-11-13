@@ -152,7 +152,7 @@ func checkVersion(
 	}
 	store := rootmulti.NewStore(db, log.NewNopLogger(), nil)
 
-	height := store.LatestVersion() + 1
+	height := store.LatestVersion()
 	db.Close()
 
 	if crd == nil {
@@ -166,7 +166,7 @@ func checkVersion(
 		return err
 	}
 
-	var image string
+	image := crd.Spec.PodTemplate.Image
 	for _, v := range crd.Spec.ChainSpec.Versions {
 		if uint64(height) < v.UpgradeHeight {
 			break
