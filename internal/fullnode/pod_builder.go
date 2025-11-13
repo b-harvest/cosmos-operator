@@ -618,13 +618,16 @@ func startCmdAndArgs(crd *cosmosv1.CosmosFullNode) (string, []string) {
 		privvalSleep = *v
 	}
 
+	// Use shell wrapper to set HOME to CHAIN_HOME to prevent chain binary
+	// from attempting to create directories in the default HOME location
+	var shellBody string
 	if crd.Spec.Type == cosmosv1.Sentry && privvalSleep > 0 {
-		shellBody := fmt.Sprintf(`sleep %d
-%s %s`, privvalSleep, binary, strings.Join(args, " "))
-		return "sh", []string{"-c", shellBody}
+		shellBody = fmt.Sprintf(`sleep %d
+HOME="$CHAIN_HOME" %s %s`, privvalSleep, binary, strings.Join(args, " "))
+	} else {
+		shellBody = fmt.Sprintf(`HOME="$CHAIN_HOME" %s %s`, binary, strings.Join(args, " "))
 	}
-
-	return binary, args
+	return "sh", []string{"-c", shellBody}
 }
 
 func startCommandArgs(crd *cosmosv1.CosmosFullNode) []string {

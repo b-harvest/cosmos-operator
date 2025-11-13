@@ -215,7 +215,10 @@ func TestPodBuilder(t *testing.T) {
 
 		test.RequireValidMetadata(t, pod)
 
-		require.Equal(t, []string{"start", "--home", "/home/operator/cosmos", "--foo", "bar"}, pod.Spec.Containers[0].Args)
+		require.Equal(t, "sh", pod.Spec.Containers[0].Command[0])
+		require.Equal(t, "-c", pod.Spec.Containers[0].Args[0])
+		require.Contains(t, pod.Spec.Containers[0].Args[1], "HOME=\"$CHAIN_HOME\"")
+		require.Contains(t, pod.Spec.Containers[0].Args[1], "start --home /home/operator/cosmos --foo bar")
 	})
 
 	t.Run("containers", func(t *testing.T) {
@@ -437,16 +440,18 @@ func TestPodBuilder(t *testing.T) {
 
 		require.Equal(t, "ghcr.io/cosmoshub:v1.2.3", c.Image)
 
-		require.Equal(t, []string{"gaiad"}, c.Command)
-		require.Equal(t, []string{"start", "--home", defaultHome}, c.Args)
+		require.Equal(t, []string{"sh"}, c.Command)
+		require.Equal(t, "-c", c.Args[0])
+		require.Contains(t, c.Args[1], "HOME=\"$CHAIN_HOME\"")
+		require.Contains(t, c.Args[1], "gaiad start --home "+defaultHome)
 
 		cmdCrd.Spec.ChainSpec.SkipInvariants = true
 		pod, err = NewPodBuilder(&cmdCrd).WithOrdinal(1).Build()
 		require.NoError(t, err)
 		c = pod.Spec.Containers[0]
 
-		require.Equal(t, []string{"gaiad"}, c.Command)
-		require.Equal(t, []string{"start", "--home", defaultHome, "--x-crisis-skip-assert-invariants"}, c.Args)
+		require.Equal(t, []string{"sh"}, c.Command)
+		require.Contains(t, c.Args[1], "--x-crisis-skip-assert-invariants")
 
 		cmdCrd.Spec.ChainSpec.LogLevel = ptr("debug")
 		cmdCrd.Spec.ChainSpec.LogFormat = ptr("json")
@@ -454,14 +459,16 @@ func TestPodBuilder(t *testing.T) {
 		require.NoError(t, err)
 		c = pod.Spec.Containers[0]
 
-		require.Equal(t, []string{"start", "--home", defaultHome, "--x-crisis-skip-assert-invariants", "--log_level", "debug", "--log_format", "json"}, c.Args)
+		require.Contains(t, c.Args[1], "--x-crisis-skip-assert-invariants")
+		require.Contains(t, c.Args[1], "--log_level debug")
+		require.Contains(t, c.Args[1], "--log_format json")
 
 		cmdCrd.Spec.ChainSpec.HomeDir = ".other"
 		pod, err = NewPodBuilder(&cmdCrd).WithOrdinal(1).Build()
 		require.NoError(t, err)
 
 		c = pod.Spec.Containers[0]
-		require.Equal(t, []string{"start", "--home", "/home/operator/.other", "--x-crisis-skip-assert-invariants", "--log_level", "debug", "--log_format", "json"}, c.Args)
+		require.Contains(t, c.Args[1], "--home /home/operator/.other")
 	})
 
 	t.Run("sentry start container command ", func(t *testing.T) {
@@ -475,7 +482,7 @@ func TestPodBuilder(t *testing.T) {
 
 		require.Equal(t, []string{"sh"}, c.Command)
 		const wantBody1 = `sleep 10
-gaiad start --home /home/operator/cosmos`
+HOME="$CHAIN_HOME" gaiad start --home /home/operator/cosmos`
 		require.Equal(t, []string{"-c", wantBody1}, c.Args)
 
 		cmdCrd.Spec.ChainSpec.PrivvalSleepSeconds = ptr(int32(60))
@@ -484,7 +491,7 @@ gaiad start --home /home/operator/cosmos`
 		c = pod.Spec.Containers[0]
 
 		const wantBody2 = `sleep 60
-gaiad start --home /home/operator/cosmos`
+HOME="$CHAIN_HOME" gaiad start --home /home/operator/cosmos`
 		require.Equal(t, []string{"-c", wantBody2}, c.Args)
 
 		cmdCrd.Spec.ChainSpec.PrivvalSleepSeconds = ptr(int32(0))
@@ -492,7 +499,8 @@ gaiad start --home /home/operator/cosmos`
 		require.NoError(t, err)
 		c = pod.Spec.Containers[0]
 
-		require.Equal(t, []string{"gaiad"}, c.Command)
+		require.Equal(t, []string{"sh"}, c.Command)
+		require.Contains(t, c.Args[1], "HOME=\"$CHAIN_HOME\"")
 	})
 
 	t.Run("rpc probes", func(t *testing.T) {
