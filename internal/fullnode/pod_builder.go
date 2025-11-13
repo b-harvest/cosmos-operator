@@ -431,7 +431,7 @@ else
 	echo "Skipping chain init; already initialized."
 fi
 echo "Initializing into tmp dir for downstream processing..."
-%s --home "$WORK_DIR/.tmp" || true
+HOME="$WORK_DIR/.tmp" %s --home "$WORK_DIR/.tmp" || true
 `, initCmd, initCmd),
 		},
 		Env:             env,
