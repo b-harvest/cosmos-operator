@@ -239,21 +239,25 @@ func TestPodBuilder(t *testing.T) {
 
 		require.Equal(t, startContainer.Env[0].Name, "HOME")
 		require.Equal(t, startContainer.Env[0].Value, "/home/operator")
-		require.Equal(t, startContainer.Env[1].Name, "CHAIN_HOME")
-		require.Equal(t, startContainer.Env[1].Value, "/home/operator/cosmos")
-		require.Equal(t, startContainer.Env[2].Name, "GENESIS_FILE")
-		require.Equal(t, startContainer.Env[2].Value, "/home/operator/cosmos/config/genesis.json")
-		require.Equal(t, startContainer.Env[3].Name, "ADDRBOOK_FILE")
-		require.Equal(t, startContainer.Env[3].Value, "/home/operator/cosmos/config/addrbook.json")
-		require.Equal(t, startContainer.Env[4].Name, "CONFIG_DIR")
-		require.Equal(t, startContainer.Env[4].Value, "/home/operator/cosmos/config")
-		require.Equal(t, startContainer.Env[5].Name, "DATA_DIR")
-		require.Equal(t, startContainer.Env[5].Value, "/home/operator/cosmos/data")
+		require.Equal(t, startContainer.Env[1].Name, "WORK_DIR")
+		require.Equal(t, startContainer.Env[1].Value, "/home/operator")
+		require.Equal(t, startContainer.Env[2].Name, "CHAIN_HOME")
+		require.Equal(t, startContainer.Env[2].Value, "/home/operator/cosmos")
+		require.Equal(t, startContainer.Env[3].Name, "GENESIS_FILE")
+		require.Equal(t, startContainer.Env[3].Value, "/home/operator/cosmos/config/genesis.json")
+		require.Equal(t, startContainer.Env[4].Name, "ADDRBOOK_FILE")
+		require.Equal(t, startContainer.Env[4].Value, "/home/operator/cosmos/config/addrbook.json")
+		require.Equal(t, startContainer.Env[5].Name, "CONFIG_DIR")
+		require.Equal(t, startContainer.Env[5].Value, "/home/operator/cosmos/config")
+		require.Equal(t, startContainer.Env[6].Name, "DATA_DIR")
+		require.Equal(t, startContainer.Env[6].Value, "/home/operator/cosmos/data")
+		require.Equal(t, startContainer.Env[7].Name, "CHAIN_ID")
+		require.Equal(t, startContainer.Env[7].Value, "osmosis-123")
 		require.Equal(t, envVars(&crd), startContainer.Env)
 
 		healthContainer := pod.Spec.Containers[1]
 		require.Equal(t, "healthcheck", healthContainer.Name)
-		require.Equal(t, "ghcr.io/strangelove-ventures/cosmos-operator:latest", healthContainer.Image)
+		require.Equal(t, "ghcr.io/b-harvest/cosmos-operator:latest", healthContainer.Image)
 		require.Equal(t, []string{"/manager", "healthcheck"}, healthContainer.Command)
 		require.Empty(t, healthContainer.Args)
 		require.Empty(t, healthContainer.ImagePullPolicy)
@@ -268,13 +272,13 @@ func TestPodBuilder(t *testing.T) {
 		require.Len(t, lo.Map(pod.Spec.InitContainers, func(c corev1.Container, _ int) string { return c.Name }), 7)
 
 		wantInitImages := []string{
-			"ghcr.io/strangelove-ventures/infra-toolkit:v0.1.6",
+			"ghcr.io/bharvest-devops/infratoolkit:v0.1.0",
 			"main-image:v1.2.3",
-			"ghcr.io/strangelove-ventures/infra-toolkit:v0.1.6",
-			"ghcr.io/strangelove-ventures/infra-toolkit:v0.1.6",
-			"ghcr.io/strangelove-ventures/infra-toolkit:v0.1.6",
-			"ghcr.io/strangelove-ventures/infra-toolkit:v0.1.6",
-			"ghcr.io/strangelove-ventures/cosmos-operator:latest",
+			"ghcr.io/bharvest-devops/infratoolkit:v0.1.0",
+			"ghcr.io/bharvest-devops/infratoolkit:v0.1.0",
+			"ghcr.io/bharvest-devops/infratoolkit:v0.1.0",
+			"ghcr.io/bharvest-devops/infratoolkit:v0.1.0",
+			"ghcr.io/b-harvest/cosmos-operator:latest",
 		}
 		require.Equal(t, wantInitImages, lo.Map(pod.Spec.InitContainers, func(c corev1.Container, _ int) string {
 			return c.Image
@@ -286,11 +290,11 @@ func TestPodBuilder(t *testing.T) {
 		}
 
 		freshCont := pod.Spec.InitContainers[0]
-		require.Contains(t, freshCont.Args[1], `rm -rf "$HOME/.tmp/*"`)
+		require.Contains(t, freshCont.Args[1], `rm -rf "$WORK_DIR/.tmp/*"`)
 
 		initCont := pod.Spec.InitContainers[1]
 		require.Contains(t, initCont.Args[1], `osmosisd init --chain-id osmosis-123 osmosis-6 --home "$CHAIN_HOME"`)
-		require.Contains(t, initCont.Args[1], `osmosisd init --chain-id osmosis-123 osmosis-6 --home "$HOME/.tmp"`)
+		require.Contains(t, initCont.Args[1], `osmosisd init --chain-id osmosis-123 osmosis-6 --home "$WORK_DIR/.tmp"`)
 
 		mergeConfig1 := pod.Spec.InitContainers[3]
 		// The order of config-merge arguments is important. Rightmost takes precedence.
@@ -298,8 +302,8 @@ func TestPodBuilder(t *testing.T) {
 
 		mergeConfig := pod.Spec.InitContainers[4]
 		// The order of config-merge arguments is important. Rightmost takes precedence.
-		require.Contains(t, mergeConfig.Args[1], `config-merge -f toml "$TMP_DIR/config.toml" "$OVERLAY_DIR/config-overlay.toml" > "$CONFIG_DIR/config.toml"`)
-		require.Contains(t, mergeConfig.Args[1], `config-merge -f toml "$TMP_DIR/app.toml" "$OVERLAY_DIR/app-overlay.toml" > "$CONFIG_DIR/app.toml`)
+		require.Contains(t, mergeConfig.Args[1], `config-merge -f toml -a overwrite "$TMP_DIR/config.toml" "$OVERLAY_DIR/config-overlay.toml" > "$CONFIG_DIR/config.toml"`)
+		require.Contains(t, mergeConfig.Args[1], `config-merge -f toml -a overwrite "$TMP_DIR/app.toml" "$OVERLAY_DIR/app-overlay.toml" > "$CONFIG_DIR/app.toml`)
 	})
 
 	t.Run("containers - configured home dir", func(t *testing.T) {
@@ -318,16 +322,18 @@ func TestPodBuilder(t *testing.T) {
 
 		require.Equal(t, container.Env[0].Name, "HOME")
 		require.Equal(t, container.Env[0].Value, "/home/operator")
-		require.Equal(t, container.Env[1].Name, "CHAIN_HOME")
-		require.Equal(t, container.Env[1].Value, "/home/operator/.osmosisd")
-		require.Equal(t, container.Env[2].Name, "GENESIS_FILE")
-		require.Equal(t, container.Env[2].Value, "/home/operator/.osmosisd/config/genesis.json")
-		require.Equal(t, container.Env[3].Name, "ADDRBOOK_FILE")
-		require.Equal(t, container.Env[3].Value, "/home/operator/.osmosisd/config/addrbook.json")
-		require.Equal(t, container.Env[4].Name, "CONFIG_DIR")
-		require.Equal(t, container.Env[4].Value, "/home/operator/.osmosisd/config")
-		require.Equal(t, container.Env[5].Name, "DATA_DIR")
-		require.Equal(t, container.Env[5].Value, "/home/operator/.osmosisd/data")
+		require.Equal(t, container.Env[1].Name, "WORK_DIR")
+		require.Equal(t, container.Env[1].Value, "/home/operator")
+		require.Equal(t, container.Env[2].Name, "CHAIN_HOME")
+		require.Equal(t, container.Env[2].Value, "/home/operator/.osmosisd")
+		require.Equal(t, container.Env[3].Name, "GENESIS_FILE")
+		require.Equal(t, container.Env[3].Value, "/home/operator/.osmosisd/config/genesis.json")
+		require.Equal(t, container.Env[4].Name, "ADDRBOOK_FILE")
+		require.Equal(t, container.Env[4].Value, "/home/operator/.osmosisd/config/addrbook.json")
+		require.Equal(t, container.Env[5].Name, "CONFIG_DIR")
+		require.Equal(t, container.Env[5].Value, "/home/operator/.osmosisd/config")
+		require.Equal(t, container.Env[6].Name, "DATA_DIR")
+		require.Equal(t, container.Env[6].Value, "/home/operator/.osmosisd/data")
 
 		require.NotEmpty(t, pod.Spec.InitContainers)
 
