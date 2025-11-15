@@ -125,7 +125,7 @@ func (r *StuckHeightRecoveryReconciler) Reconcile(ctx context.Context, req ctrl.
 		return r.handleHeightStuck(ctx, recovery, crd, reporter)
 
 	case cosmosv1.StuckHeightRecoveryPhaseCreatingSnapshot:
-		return r.handleCreatingSnapshot(ctx, recovery, reporter)
+		return r.handleCreatingSnapshot(ctx, recovery, crd, reporter)
 
 	case cosmosv1.StuckHeightRecoveryPhaseWaitingForSnapshot:
 		return r.handleWaitingForSnapshot(ctx, recovery, crd, reporter)
@@ -245,8 +245,27 @@ func (r *StuckHeightRecoveryReconciler) handleHeightStuck(
 func (r *StuckHeightRecoveryReconciler) handleCreatingSnapshot(
 	ctx context.Context,
 	recovery *cosmosv1.StuckHeightRecovery,
+	crd *cosmosv1.CosmosFullNode,
 	reporter kube.EventReporter,
 ) (ctrl.Result, error) {
+	// First, mark the stuck pod in CosmosFullNode status to delete it before creating snapshot
+	if crd.Status.StuckHeightRecoveryStatus == nil {
+		crd.Status.StuckHeightRecoveryStatus = make(map[string]cosmosv1.StuckHeightRecoveryPodStatus)
+	}
+	if _, exists := crd.Status.StuckHeightRecoveryStatus[recovery.Name]; !exists {
+		crd.Status.StuckHeightRecoveryStatus[recovery.Name] = cosmosv1.StuckHeightRecoveryPodStatus{
+			PodName: recovery.Status.StuckPodName,
+		}
+		if err := r.Status().Update(ctx, crd); err != nil {
+			reporter.Error(err, "Failed to update CosmosFullNode status")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, err
+		}
+		reporter.Info(fmt.Sprintf("Marked pod %s for deletion before snapshot", recovery.Status.StuckPodName))
+		reporter.RecordInfo("PodMarkedForDeletion", fmt.Sprintf("Pod %s will be deleted before snapshot", recovery.Status.StuckPodName))
+		// Wait for pod to be deleted by CosmosFullNode controller
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
 	// Get PVC for the stuck pod
 	pvcName, err := r.snapshotCreator.GetPVCForPod(ctx, recovery.Namespace, recovery.Status.StuckPodName)
 	if err != nil {
@@ -312,27 +331,6 @@ func (r *StuckHeightRecoveryReconciler) handleWaitingForSnapshot(
 
 	reporter.Info("VolumeSnapshot is ready")
 	reporter.RecordInfo("SnapshotReady", fmt.Sprintf("VolumeSnapshot %s is ready", recovery.Status.VolumeSnapshotName))
-
-	// Mark the stuck pod in CosmosFullNode status to prevent it from being recreated during recovery
-	if crd.Status.StuckHeightRecoveryStatus == nil {
-		crd.Status.StuckHeightRecoveryStatus = make(map[string]cosmosv1.StuckHeightRecoveryPodStatus)
-	}
-	crd.Status.StuckHeightRecoveryStatus[recovery.Name] = cosmosv1.StuckHeightRecoveryPodStatus{
-		PodName: recovery.Status.StuckPodName,
-	}
-	if err := r.Status().Update(ctx, crd); err != nil {
-		reporter.Error(err, "Failed to update CosmosFullNode status")
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, err
-	}
-
-	reporter.Info(fmt.Sprintf("Marked pod %s for recovery, it will be excluded from reconciliation", recovery.Status.StuckPodName))
-	reporter.RecordInfo("PodMarkedForRecovery", fmt.Sprintf("Pod %s marked for recovery", recovery.Status.StuckPodName))
-
-	// Refetch recovery to get the latest version before updating
-	if err := r.Get(ctx, client.ObjectKeyFromObject(recovery), recovery); err != nil {
-		reporter.Error(err, "Failed to refetch StuckHeightRecovery")
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, err
-	}
 
 	recovery.Status.Phase = cosmosv1.StuckHeightRecoveryPhaseRunningRecovery
 	recovery.Status.Message = "Starting recovery script"
