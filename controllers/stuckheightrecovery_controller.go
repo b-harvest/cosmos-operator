@@ -24,6 +24,7 @@ import (
 	cosmosv1 "github.com/b-harvest/cosmos-operator/api/v1"
 	"github.com/b-harvest/cosmos-operator/internal/kube"
 	"github.com/b-harvest/cosmos-operator/internal/stuckheight"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -266,6 +267,24 @@ func (r *StuckHeightRecoveryReconciler) handleCreatingSnapshot(
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
+	// Check if pod is actually deleted before creating snapshot
+	pod := &corev1.Pod{}
+	err := r.Get(ctx, client.ObjectKey{
+		Name:      recovery.Status.StuckPodName,
+		Namespace: recovery.Namespace,
+	}, pod)
+	if err == nil {
+		// Pod still exists, wait for deletion
+		reporter.Info(fmt.Sprintf("Waiting for pod %s to be deleted", recovery.Status.StuckPodName))
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+	if !errors.IsNotFound(err) {
+		reporter.Error(err, "Failed to check pod existence")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, err
+	}
+
+	reporter.Info(fmt.Sprintf("Pod %s deleted, proceeding with snapshot", recovery.Status.StuckPodName))
+
 	// Get PVC for the stuck pod
 	pvcName, err := r.snapshotCreator.GetPVCForPod(ctx, recovery.Namespace, recovery.Status.StuckPodName)
 	if err != nil {
@@ -348,6 +367,24 @@ func (r *StuckHeightRecoveryReconciler) handleRunningRecovery(
 	crd *cosmosv1.CosmosFullNode,
 	reporter kube.EventReporter,
 ) (ctrl.Result, error) {
+	// Ensure the stuck pod is deleted before creating recovery pod
+	pod := &corev1.Pod{}
+	err := r.Get(ctx, client.ObjectKey{
+		Name:      recovery.Status.StuckPodName,
+		Namespace: recovery.Namespace,
+	}, pod)
+	if err == nil {
+		// Pod still exists, wait for deletion
+		reporter.Info(fmt.Sprintf("Waiting for pod %s to be fully deleted before recovery", recovery.Status.StuckPodName))
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+	if !errors.IsNotFound(err) {
+		reporter.Error(err, "Failed to check pod existence")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, err
+	}
+
+	reporter.Info(fmt.Sprintf("Pod %s confirmed deleted, creating recovery pod", recovery.Status.StuckPodName))
+
 	// Get PVC for the stuck pod
 	pvcName, err := r.snapshotCreator.GetPVCForPod(ctx, recovery.Namespace, recovery.Status.StuckPodName)
 	if err != nil {
