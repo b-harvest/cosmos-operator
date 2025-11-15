@@ -130,7 +130,7 @@ type StuckHeightRecoveryStatus struct {
 	// +optional
 	RateLimitWindowStart *metav1.Time `json:"rateLimitWindowStart,omitempty"`
 
-	// Last observed height
+	// Last observed max height across all pods
 	// +optional
 	LastObservedHeight uint64 `json:"lastObservedHeight,omitempty"`
 
@@ -138,21 +138,15 @@ type StuckHeightRecoveryStatus struct {
 	// +optional
 	LastHeightUpdateTime *metav1.Time `json:"lastHeightUpdateTime,omitempty"`
 
-	// Name of the stuck pod being recovered
+	// Status of each stuck pod being recovered
+	// Map key is the pod name
 	// +optional
-	StuckPodName string `json:"stuckPodName,omitempty"`
+	// +mapType:=granular
+	StuckPods map[string]*StuckPodRecoveryStatus `json:"stuckPods,omitempty"`
 
-	// Name of the PVC for the stuck pod
+	// History of recovery attempts
 	// +optional
-	StuckPodPVCName string `json:"stuckPodPVCName,omitempty"`
-
-	// Name of the created VolumeSnapshot (if any)
-	// +optional
-	VolumeSnapshotName string `json:"volumeSnapshotName,omitempty"`
-
-	// Name of the recovery pod
-	// +optional
-	RecoveryPodName string `json:"recoveryPodName,omitempty"`
+	RecoveryHistory []RecoveryHistoryEntry `json:"recoveryHistory,omitempty"`
 
 	// Human-readable status message
 	// +optional
@@ -161,49 +155,146 @@ type StuckHeightRecoveryStatus struct {
 	// ObservedGeneration is the most recent generation observed
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// Deprecated: Use StuckPods instead. Name of the stuck pod being recovered
+	// +optional
+	StuckPodName string `json:"stuckPodName,omitempty"`
+
+	// Deprecated: Use StuckPods instead. Name of the PVC for the stuck pod
+	// +optional
+	StuckPodPVCName string `json:"stuckPodPVCName,omitempty"`
+
+	// Deprecated: Use StuckPods instead. Name of the created VolumeSnapshot (if any)
+	// +optional
+	VolumeSnapshotName string `json:"volumeSnapshotName,omitempty"`
+
+	// Deprecated: Use StuckPods instead. Name of the recovery pod
+	// +optional
+	RecoveryPodName string `json:"recoveryPodName,omitempty"`
 }
 
-// StuckHeightRecoveryPhase represents the current phase of recovery
-// +kubebuilder:validation:Enum=Monitoring;HeightStuck;CreatingSnapshot;WaitingForSnapshot;RunningRecovery;WaitingForRecovery;RecoveryComplete;RecoveryFailed;RateLimited;Suspended
+// StuckPodRecoveryStatus tracks recovery status for a single stuck pod
+type StuckPodRecoveryStatus struct {
+	// Name of the stuck pod
+	PodName string `json:"podName"`
+
+	// Name of the PVC for this pod
+	PVCName string `json:"pvcName"`
+
+	// Height at which the pod got stuck
+	StuckAtHeight uint64 `json:"stuckAtHeight"`
+
+	// Current height of this pod (if readable)
+	// +optional
+	CurrentHeight *uint64 `json:"currentHeight,omitempty"`
+
+	// Time when stuck was first detected
+	DetectedAt metav1.Time `json:"detectedAt"`
+
+	// Current recovery phase for this pod
+	Phase PodRecoveryPhase `json:"phase"`
+
+	// Name of the VolumeSnapshot created for this pod
+	// +optional
+	VolumeSnapshotName string `json:"volumeSnapshotName,omitempty"`
+
+	// Name of the recovery pod for this pod
+	// +optional
+	RecoveryPodName string `json:"recoveryPodName,omitempty"`
+
+	// Human-readable message for this pod's recovery
+	// +optional
+	Message string `json:"message,omitempty"`
+
+	// Last update time
+	// +optional
+	LastUpdateTime *metav1.Time `json:"lastUpdateTime,omitempty"`
+}
+
+// PodRecoveryPhase represents the recovery phase for a single pod
+// +kubebuilder:validation:Enum=Stuck;Recovering;CreatingSnapshot;WaitingForSnapshot;RunningRecovery;WaitingForRecovery;Recovered;Failed;HeightRecovered
+type PodRecoveryPhase string
+
+const (
+	// Pod is stuck and waiting for recovery to start
+	PodRecoveryPhaseStuck PodRecoveryPhase = "Stuck"
+
+	// Pod recovery is in progress (generic)
+	PodRecoveryPhaseRecovering PodRecoveryPhase = "Recovering"
+
+	// Creating VolumeSnapshot for this pod
+	PodRecoveryPhaseCreatingSnapshot PodRecoveryPhase = "CreatingSnapshot"
+
+	// Waiting for VolumeSnapshot to be ready
+	PodRecoveryPhaseWaitingForSnapshot PodRecoveryPhase = "WaitingForSnapshot"
+
+	// Running recovery script for this pod
+	PodRecoveryPhaseRunningRecovery PodRecoveryPhase = "RunningRecovery"
+
+	// Waiting for recovery pod to complete
+	PodRecoveryPhaseWaitingForRecovery PodRecoveryPhase = "WaitingForRecovery"
+
+	// Recovery completed successfully for this pod
+	PodRecoveryPhaseRecovered PodRecoveryPhase = "Recovered"
+
+	// Recovery failed for this pod
+	PodRecoveryPhaseFailed PodRecoveryPhase = "Failed"
+
+	// Pod height started moving again on its own
+	PodRecoveryPhaseHeightRecovered PodRecoveryPhase = "HeightRecovered"
+)
+
+// RecoveryHistoryEntry records a recovery event
+type RecoveryHistoryEntry struct {
+	// Timestamp of this event
+	Timestamp metav1.Time `json:"timestamp"`
+
+	// Name of the pod involved
+	PodName string `json:"podName"`
+
+	// Height at which the event occurred
+	Height uint64 `json:"height"`
+
+	// Type of event (detected, recovered, failed, height_recovered)
+	EventType string `json:"eventType"`
+
+	// Human-readable message
+	Message string `json:"message"`
+}
+
+// StuckHeightRecoveryPhase represents the current overall phase
+// +kubebuilder:validation:Enum=Monitoring;Recovering;RateLimited;Suspended
 type StuckHeightRecoveryPhase string
 
 const (
 	// Monitoring normal operation, watching for stuck height
 	StuckHeightRecoveryPhaseMonitoring StuckHeightRecoveryPhase = "Monitoring"
 
-	// Height has been detected as stuck
-	StuckHeightRecoveryPhaseHeightStuck StuckHeightRecoveryPhase = "HeightStuck"
-
-	// Creating VolumeSnapshot before recovery
-	StuckHeightRecoveryPhaseCreatingSnapshot StuckHeightRecoveryPhase = "CreatingSnapshot"
-
-	// Waiting for VolumeSnapshot to be ready
-	StuckHeightRecoveryPhaseWaitingForSnapshot StuckHeightRecoveryPhase = "WaitingForSnapshot"
-
-	// Running recovery script
-	StuckHeightRecoveryPhaseRunningRecovery StuckHeightRecoveryPhase = "RunningRecovery"
-
-	// Waiting for recovery pod to complete
-	StuckHeightRecoveryPhaseWaitingForRecovery StuckHeightRecoveryPhase = "WaitingForRecovery"
-
-	// Recovery completed successfully
-	StuckHeightRecoveryPhaseRecoveryComplete StuckHeightRecoveryPhase = "RecoveryComplete"
-
-	// Recovery failed
-	StuckHeightRecoveryPhaseRecoveryFailed StuckHeightRecoveryPhase = "RecoveryFailed"
+	// One or more pods are being recovered
+	StuckHeightRecoveryPhaseRecovering StuckHeightRecoveryPhase = "Recovering"
 
 	// Rate limit exceeded, waiting for window to reset
 	StuckHeightRecoveryPhaseRateLimited StuckHeightRecoveryPhase = "RateLimited"
 
 	// Recovery is suspended
 	StuckHeightRecoveryPhaseSuspended StuckHeightRecoveryPhase = "Suspended"
+
+	// Deprecated phases (kept for backward compatibility)
+	StuckHeightRecoveryPhaseHeightStuck         StuckHeightRecoveryPhase = "HeightStuck"
+	StuckHeightRecoveryPhaseCreatingSnapshot    StuckHeightRecoveryPhase = "CreatingSnapshot"
+	StuckHeightRecoveryPhaseWaitingForSnapshot  StuckHeightRecoveryPhase = "WaitingForSnapshot"
+	StuckHeightRecoveryPhaseRunningRecovery     StuckHeightRecoveryPhase = "RunningRecovery"
+	StuckHeightRecoveryPhaseWaitingForRecovery  StuckHeightRecoveryPhase = "WaitingForRecovery"
+	StuckHeightRecoveryPhaseRecoveryComplete    StuckHeightRecoveryPhase = "RecoveryComplete"
+	StuckHeightRecoveryPhaseRecoveryFailed      StuckHeightRecoveryPhase = "RecoveryFailed"
 )
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:path=stuckheightrecoveries,scope=Namespaced,shortName=shr
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
-// +kubebuilder:printcolumn:name="Stuck Pod",type=string,JSONPath=`.status.stuckPodName`
+// +kubebuilder:printcolumn:name="Message",type=string,JSONPath=`.status.message`,priority=1
+// +kubebuilder:printcolumn:name="Max Height",type=integer,JSONPath=`.status.lastObservedHeight`
 // +kubebuilder:printcolumn:name="Last Recovery",type=date,JSONPath=`.status.lastRecoveryTime`
 // +kubebuilder:printcolumn:name="Attempts",type=integer,JSONPath=`.status.recoveryAttempts`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`

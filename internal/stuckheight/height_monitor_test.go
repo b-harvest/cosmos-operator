@@ -29,13 +29,11 @@ func TestHeightMonitor_CheckStuckHeight(t *testing.T) {
 			},
 		}
 
-		stuck, podName, height, err := monitor.CheckStuckHeight(ctx, crd, recovery)
+		result, err := monitor.CheckStuckHeight(ctx, crd, recovery)
 
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "no height information available")
-		require.False(t, stuck)
-		require.Empty(t, podName)
-		require.Equal(t, uint64(0), height)
+		require.Nil(t, result)
 	})
 
 	t.Run("height is zero", func(t *testing.T) {
@@ -56,13 +54,11 @@ func TestHeightMonitor_CheckStuckHeight(t *testing.T) {
 			},
 		}
 
-		stuck, podName, height, err := monitor.CheckStuckHeight(ctx, crd, recovery)
+		result, err := monitor.CheckStuckHeight(ctx, crd, recovery)
 
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "height is zero")
-		require.False(t, stuck)
-		require.Empty(t, podName)
-		require.Equal(t, uint64(0), height)
+		require.Contains(t, err.Error(), "all pod heights are zero")
+		require.Nil(t, result)
 	})
 
 	t.Run("height changed - not stuck", func(t *testing.T) {
@@ -88,12 +84,12 @@ func TestHeightMonitor_CheckStuckHeight(t *testing.T) {
 			},
 		}
 
-		stuck, podName, height, err := monitor.CheckStuckHeight(ctx, crd, recovery)
+		result, err := monitor.CheckStuckHeight(ctx, crd, recovery)
 
 		require.NoError(t, err)
-		require.False(t, stuck)
-		require.Empty(t, podName)
-		require.Equal(t, uint64(200), height)
+		require.Equal(t, uint64(200), result.MaxHeight)
+		require.Empty(t, result.NewlyStuckPods)
+		require.Empty(t, result.RecoveredPods)
 	})
 
 	t.Run("first observation of height - not stuck", func(t *testing.T) {
@@ -118,12 +114,12 @@ func TestHeightMonitor_CheckStuckHeight(t *testing.T) {
 			},
 		}
 
-		stuck, podName, height, err := monitor.CheckStuckHeight(ctx, crd, recovery)
+		result, err := monitor.CheckStuckHeight(ctx, crd, recovery)
 
 		require.NoError(t, err)
-		require.False(t, stuck)
-		require.Empty(t, podName)
-		require.Equal(t, uint64(100), height)
+		require.Equal(t, uint64(100), result.MaxHeight)
+		require.Empty(t, result.NewlyStuckPods)
+		require.Empty(t, result.RecoveredPods)
 	})
 
 	t.Run("height stuck but duration not exceeded", func(t *testing.T) {
@@ -149,12 +145,12 @@ func TestHeightMonitor_CheckStuckHeight(t *testing.T) {
 			},
 		}
 
-		stuck, podName, height, err := monitor.CheckStuckHeight(ctx, crd, recovery)
+		result, err := monitor.CheckStuckHeight(ctx, crd, recovery)
 
 		require.NoError(t, err)
-		require.False(t, stuck)
-		require.Empty(t, podName)
-		require.Equal(t, uint64(100), height)
+		require.Equal(t, uint64(100), result.MaxHeight)
+		require.Empty(t, result.NewlyStuckPods)
+		require.Empty(t, result.RecoveredPods)
 	})
 
 	t.Run("height stuck and duration exceeded", func(t *testing.T) {
@@ -165,6 +161,7 @@ func TestHeightMonitor_CheckStuckHeight(t *testing.T) {
 			Status: cosmosv1.FullNodeStatus{
 				Height: map[string]uint64{
 					"test-pod-0": 100,
+					"test-pod-1": 1000, // This pod is at normal height
 				},
 			},
 		}
@@ -180,12 +177,13 @@ func TestHeightMonitor_CheckStuckHeight(t *testing.T) {
 			},
 		}
 
-		stuck, podName, height, err := monitor.CheckStuckHeight(ctx, crd, recovery)
+		result, err := monitor.CheckStuckHeight(ctx, crd, recovery)
 
 		require.NoError(t, err)
-		require.True(t, stuck)
-		require.Equal(t, "test-pod-0", podName)
-		require.Equal(t, uint64(100), height)
+		require.Equal(t, uint64(1000), result.MaxHeight)
+		require.Contains(t, result.NewlyStuckPods, "test-pod-0")
+		require.Equal(t, uint64(100), result.NewlyStuckPods["test-pod-0"])
+		require.NotContains(t, result.NewlyStuckPods, "test-pod-1")
 	})
 
 	t.Run("invalid stuck duration", func(t *testing.T) {
@@ -206,16 +204,14 @@ func TestHeightMonitor_CheckStuckHeight(t *testing.T) {
 			},
 		}
 
-		stuck, podName, height, err := monitor.CheckStuckHeight(ctx, crd, recovery)
+		result, err := monitor.CheckStuckHeight(ctx, crd, recovery)
 
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "invalid stuck duration")
-		require.False(t, stuck)
-		require.Empty(t, podName)
-		require.Equal(t, uint64(0), height)
+		require.Nil(t, result)
 	})
 
-	t.Run("multiple pods - uses first one", func(t *testing.T) {
+	t.Run("multiple pods stuck simultaneously", func(t *testing.T) {
 		mock := &mockClient{}
 		monitor := NewHeightMonitor(mock)
 
@@ -224,6 +220,7 @@ func TestHeightMonitor_CheckStuckHeight(t *testing.T) {
 				Height: map[string]uint64{
 					"test-pod-0": 100,
 					"test-pod-1": 100,
+					"test-pod-2": 1000, // This pod is at normal height
 				},
 			},
 		}
@@ -239,11 +236,54 @@ func TestHeightMonitor_CheckStuckHeight(t *testing.T) {
 			},
 		}
 
-		stuck, podName, height, err := monitor.CheckStuckHeight(ctx, crd, recovery)
+		result, err := monitor.CheckStuckHeight(ctx, crd, recovery)
 
 		require.NoError(t, err)
-		require.True(t, stuck)
-		require.NotEmpty(t, podName)
-		require.Equal(t, uint64(100), height)
+		require.Equal(t, uint64(1000), result.MaxHeight)
+		require.Len(t, result.NewlyStuckPods, 2)
+		require.Contains(t, result.NewlyStuckPods, "test-pod-0")
+		require.Contains(t, result.NewlyStuckPods, "test-pod-1")
+		require.NotContains(t, result.NewlyStuckPods, "test-pod-2")
+	})
+
+	t.Run("pod recovered - height started moving again", func(t *testing.T) {
+		mock := &mockClient{}
+		monitor := NewHeightMonitor(mock)
+
+		crd := &cosmosv1.CosmosFullNode{
+			Status: cosmosv1.FullNodeStatus{
+				Height: map[string]uint64{
+					"test-pod-0": 1000, // Height recovered
+					"test-pod-1": 990,  // Close to max, recovered
+				},
+			},
+		}
+
+		recovery := &cosmosv1.StuckHeightRecovery{
+			Spec: cosmosv1.StuckHeightRecoverySpec{
+				StuckDuration: "5m",
+			},
+			Status: cosmosv1.StuckHeightRecoveryStatus{
+				StuckPods: map[string]*cosmosv1.StuckPodRecoveryStatus{
+					"test-pod-0": {
+						PodName:       "test-pod-0",
+						StuckAtHeight: 100,
+					},
+					"test-pod-1": {
+						PodName:       "test-pod-1",
+						StuckAtHeight: 100,
+					},
+				},
+			},
+		}
+
+		result, err := monitor.CheckStuckHeight(ctx, crd, recovery)
+
+		require.NoError(t, err)
+		require.Equal(t, uint64(1000), result.MaxHeight)
+		require.Empty(t, result.NewlyStuckPods)
+		require.Len(t, result.RecoveredPods, 2)
+		require.Contains(t, result.RecoveredPods, "test-pod-0")
+		require.Contains(t, result.RecoveredPods, "test-pod-1")
 	})
 }

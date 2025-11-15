@@ -132,34 +132,38 @@ func (r *StuckHeightRecoveryReconciler) Reconcile(ctx context.Context, req ctrl.
 	// Update observed generation
 	recovery.Status.ObservedGeneration = recovery.Generation
 
+	// Initialize StuckPods map if needed
+	if recovery.Status.StuckPods == nil {
+		recovery.Status.StuckPods = make(map[string]*cosmosv1.StuckPodRecoveryStatus)
+	}
+
 	// Handle different phases
 	switch recovery.Status.Phase {
 	case "", cosmosv1.StuckHeightRecoveryPhaseMonitoring:
 		return r.handleMonitoring(ctx, recovery, crd, reporter)
 
-	case cosmosv1.StuckHeightRecoveryPhaseHeightStuck:
-		return r.handleHeightStuck(ctx, recovery, crd, reporter)
-
-	case cosmosv1.StuckHeightRecoveryPhaseCreatingSnapshot:
-		return r.handleCreatingSnapshot(ctx, recovery, crd, reporter)
-
-	case cosmosv1.StuckHeightRecoveryPhaseWaitingForSnapshot:
-		return r.handleWaitingForSnapshot(ctx, recovery, crd, reporter)
-
-	case cosmosv1.StuckHeightRecoveryPhaseRunningRecovery:
-		return r.handleRunningRecovery(ctx, recovery, crd, reporter)
-
-	case cosmosv1.StuckHeightRecoveryPhaseWaitingForRecovery:
-		return r.handleWaitingForRecovery(ctx, recovery, reporter)
-
-	case cosmosv1.StuckHeightRecoveryPhaseRecoveryComplete:
-		return r.handleRecoveryComplete(ctx, recovery, crd, reporter)
-
-	case cosmosv1.StuckHeightRecoveryPhaseRecoveryFailed:
-		return r.handleRecoveryFailed(ctx, recovery, crd, reporter)
+	case cosmosv1.StuckHeightRecoveryPhaseRecovering:
+		return r.handleRecovering(ctx, recovery, crd, reporter)
 
 	case cosmosv1.StuckHeightRecoveryPhaseRateLimited:
 		return r.handleRateLimited(ctx, recovery, crd, reporter)
+
+	// Deprecated phases - redirect to new logic
+	case cosmosv1.StuckHeightRecoveryPhaseHeightStuck,
+		cosmosv1.StuckHeightRecoveryPhaseCreatingSnapshot,
+		cosmosv1.StuckHeightRecoveryPhaseWaitingForSnapshot,
+		cosmosv1.StuckHeightRecoveryPhaseRunningRecovery,
+		cosmosv1.StuckHeightRecoveryPhaseWaitingForRecovery,
+		cosmosv1.StuckHeightRecoveryPhaseRecoveryComplete,
+		cosmosv1.StuckHeightRecoveryPhaseRecoveryFailed:
+		// Migrate from old single-pod logic to new multi-pod logic
+		reporter.Info("Migrating from legacy phase to new multi-pod logic")
+		recovery.Status.Phase = cosmosv1.StuckHeightRecoveryPhaseMonitoring
+		recovery.Status.StuckPods = make(map[string]*cosmosv1.StuckPodRecoveryStatus)
+		if err := r.Status().Update(ctx, recovery); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
@@ -171,8 +175,8 @@ func (r *StuckHeightRecoveryReconciler) handleMonitoring(
 	crd *cosmosv1.CosmosFullNode,
 	reporter kube.EventReporter,
 ) (ctrl.Result, error) {
-	// Check if height is stuck
-	isStuck, stuckPodName, currentHeight, err := r.heightMonitor.CheckStuckHeight(ctx, crd, recovery)
+	// Check all pods for stuck height and recovery
+	result, err := r.heightMonitor.CheckStuckHeight(ctx, crd, recovery)
 	if err != nil {
 		reporter.Error(err, "Failed to check stuck height")
 		recovery.Status.Message = fmt.Sprintf("Error checking height: %v", err)
@@ -180,38 +184,523 @@ func (r *StuckHeightRecoveryReconciler) handleMonitoring(
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 
-	// Update last observed height
+	// Update last observed max height
 	now := metav1.Now()
-	if recovery.Status.LastObservedHeight != currentHeight {
-		recovery.Status.LastObservedHeight = currentHeight
+	if recovery.Status.LastObservedHeight != result.MaxHeight {
+		recovery.Status.LastObservedHeight = result.MaxHeight
 		recovery.Status.LastHeightUpdateTime = &now
-		recovery.Status.Message = fmt.Sprintf("Monitoring height: %d", currentHeight)
 
-		// Reset rate limiter when height changes
+		// Reset rate limiter when max height changes
 		r.rateLimiter.ResetWindow(recovery)
-
-		if err := r.Status().Update(ctx, recovery); err != nil {
-			return ctrl.Result{}, err
-		}
 	}
 
-	if isStuck {
-		reporter.Info(fmt.Sprintf("Height stuck detected on pod %s at height %d", stuckPodName, currentHeight))
-		recovery.Status.Phase = cosmosv1.StuckHeightRecoveryPhaseHeightStuck
-		recovery.Status.StuckPodName = stuckPodName
-		recovery.Status.Message = fmt.Sprintf("Height stuck at %d for %s", currentHeight, recovery.Spec.StuckDuration)
-		if err := r.Status().Update(ctx, recovery); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{Requeue: true}, nil
+	// Handle pods that have recovered on their own
+	for podName, currentHeight := range result.RecoveredPods {
+		stuckPod := recovery.Status.StuckPods[podName]
+		reporter.Info(fmt.Sprintf("Pod %s recovered on its own (height %d -> %d)", podName, stuckPod.StuckAtHeight, currentHeight))
+		reporter.RecordInfo("PodHeightRecovered", fmt.Sprintf("Pod %s height started moving again", podName))
+
+		// Update pod status to HeightRecovered
+		stuckPod.Phase = cosmosv1.PodRecoveryPhaseHeightRecovered
+		stuckPod.CurrentHeight = &currentHeight
+		stuckPod.Message = fmt.Sprintf("Height recovered from %d to %d", stuckPod.StuckAtHeight, currentHeight)
+		stuckPod.LastUpdateTime = &now
+
+		// Add to history
+		recovery.Status.RecoveryHistory = append(recovery.Status.RecoveryHistory, cosmosv1.RecoveryHistoryEntry{
+			Timestamp: now,
+			PodName:   podName,
+			Height:    currentHeight,
+			EventType: "height_recovered",
+			Message:   fmt.Sprintf("Pod height started moving again from %d to %d", stuckPod.StuckAtHeight, currentHeight),
+		})
+
+		// Remove from stuck pods after recording
+		delete(recovery.Status.StuckPods, podName)
 	}
 
-	recovery.Status.Phase = cosmosv1.StuckHeightRecoveryPhaseMonitoring
+	// Handle newly stuck pods
+	for podName, stuckHeight := range result.NewlyStuckPods {
+		reporter.Info(fmt.Sprintf("Detected stuck pod %s at height %d (max: %d)", podName, stuckHeight, result.MaxHeight))
+		reporter.RecordInfo("PodStuckDetected", fmt.Sprintf("Pod %s stuck at height %d", podName, stuckHeight))
+
+		// Create stuck pod entry
+		recovery.Status.StuckPods[podName] = &cosmosv1.StuckPodRecoveryStatus{
+			PodName:       podName,
+			StuckAtHeight: stuckHeight,
+			CurrentHeight: &stuckHeight,
+			DetectedAt:    now,
+			Phase:         cosmosv1.PodRecoveryPhaseStuck,
+			Message:       fmt.Sprintf("Stuck at height %d, max height is %d", stuckHeight, result.MaxHeight),
+			LastUpdateTime: &now,
+		}
+
+		// Add to history
+		recovery.Status.RecoveryHistory = append(recovery.Status.RecoveryHistory, cosmosv1.RecoveryHistoryEntry{
+			Timestamp: now,
+			PodName:   podName,
+			Height:    stuckHeight,
+			EventType: "detected",
+			Message:   fmt.Sprintf("Pod stuck detected at height %d", stuckHeight),
+		})
+	}
+
+	// Update overall phase and message
+	if len(recovery.Status.StuckPods) > 0 {
+		recovery.Status.Phase = cosmosv1.StuckHeightRecoveryPhaseRecovering
+		recovery.Status.Message = fmt.Sprintf("Recovering %d stuck pod(s)", len(recovery.Status.StuckPods))
+	} else {
+		recovery.Status.Phase = cosmosv1.StuckHeightRecoveryPhaseMonitoring
+		recovery.Status.Message = fmt.Sprintf("Monitoring height: %d", result.MaxHeight)
+	}
+
 	if err := r.Status().Update(ctx, recovery); err != nil {
 		return ctrl.Result{}, err
 	}
 
+	// If there are stuck pods, switch to recovering phase immediately
+	if len(recovery.Status.StuckPods) > 0 {
+		return ctrl.Result{Requeue: true}, nil
+	}
+
 	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+}
+
+func (r *StuckHeightRecoveryReconciler) handleRecovering(
+	ctx context.Context,
+	recovery *cosmosv1.StuckHeightRecovery,
+	crd *cosmosv1.CosmosFullNode,
+	reporter kube.EventReporter,
+) (ctrl.Result, error) {
+	// First, check for any pods that have recovered on their own
+	result, err := r.heightMonitor.CheckStuckHeight(ctx, crd, recovery)
+	if err == nil {
+		// Handle auto-recovered pods
+		now := metav1.Now()
+		for podName, currentHeight := range result.RecoveredPods {
+			if stuckPod, exists := recovery.Status.StuckPods[podName]; exists {
+				reporter.Info(fmt.Sprintf("Pod %s recovered on its own during recovery (height %d -> %d)",
+					podName, stuckPod.StuckAtHeight, currentHeight))
+
+				stuckPod.Phase = cosmosv1.PodRecoveryPhaseHeightRecovered
+				stuckPod.CurrentHeight = &currentHeight
+				stuckPod.Message = "Height started moving again during recovery"
+				stuckPod.LastUpdateTime = &now
+
+				recovery.Status.RecoveryHistory = append(recovery.Status.RecoveryHistory, cosmosv1.RecoveryHistoryEntry{
+					Timestamp: now,
+					PodName:   podName,
+					Height:    currentHeight,
+					EventType: "height_recovered",
+					Message:   "Pod recovered during recovery process",
+				})
+			}
+		}
+	}
+
+	// Process each stuck pod based on its phase
+	podsNeedingWork := false
+	for _, stuckPod := range recovery.Status.StuckPods {
+		// Skip pods that have already recovered or failed
+		if stuckPod.Phase == cosmosv1.PodRecoveryPhaseRecovered ||
+			stuckPod.Phase == cosmosv1.PodRecoveryPhaseHeightRecovered ||
+			stuckPod.Phase == cosmosv1.PodRecoveryPhaseFailed {
+			continue
+		}
+
+		podsNeedingWork = true
+
+		switch stuckPod.Phase {
+		case cosmosv1.PodRecoveryPhaseStuck:
+			if err := r.handlePodStuck(ctx, recovery, crd, stuckPod, reporter); err != nil {
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, err
+			}
+
+		case cosmosv1.PodRecoveryPhaseCreatingSnapshot:
+			if err := r.handlePodCreatingSnapshot(ctx, recovery, crd, stuckPod, reporter); err != nil {
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, err
+			}
+
+		case cosmosv1.PodRecoveryPhaseWaitingForSnapshot:
+			if err := r.handlePodWaitingForSnapshot(ctx, recovery, stuckPod, reporter); err != nil {
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, err
+			}
+
+		case cosmosv1.PodRecoveryPhaseRunningRecovery:
+			if err := r.handlePodRunningRecovery(ctx, recovery, stuckPod, reporter); err != nil {
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, err
+			}
+
+		case cosmosv1.PodRecoveryPhaseWaitingForRecovery:
+			if err := r.handlePodWaitingForRecovery(ctx, recovery, stuckPod, reporter); err != nil {
+				return ctrl.Result{RequeueAfter: 10 * time.Second}, err
+			}
+		}
+	}
+
+	// Clean up completed pods and update CosmosFullNode status
+	if err := r.cleanupCompletedPods(ctx, recovery, crd, reporter); err != nil {
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, err
+	}
+
+	// Update overall status
+	if err := r.updateOverallStatus(ctx, recovery); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// If no pods need work, go back to monitoring
+	if !podsNeedingWork && len(recovery.Status.StuckPods) == 0 {
+		recovery.Status.Phase = cosmosv1.StuckHeightRecoveryPhaseMonitoring
+		recovery.Status.Message = "All pods recovered, returning to monitoring"
+		if err := r.Status().Update(ctx, recovery); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+}
+
+func (r *StuckHeightRecoveryReconciler) handlePodStuck(
+	ctx context.Context,
+	recovery *cosmosv1.StuckHeightRecovery,
+	crd *cosmosv1.CosmosFullNode,
+	stuckPod *cosmosv1.StuckPodRecoveryStatus,
+	reporter kube.EventReporter,
+) error {
+	// Check rate limit
+	canAttempt, message, err := r.rateLimiter.CanAttemptRecovery(recovery)
+	if err != nil {
+		return err
+	}
+
+	if !canAttempt {
+		reporter.RecordInfo("RateLimited", message)
+		recovery.Status.Phase = cosmosv1.StuckHeightRecoveryPhaseRateLimited
+		recovery.Status.Message = message
+		return r.Status().Update(ctx, recovery)
+	}
+
+	// Record attempt
+	r.rateLimiter.RecordAttempt(recovery)
+	now := metav1.Now()
+	recovery.Status.LastRecoveryTime = &now
+
+	// Get PVC name for this pod
+	pvcName, err := r.snapshotCreator.GetPVCForPod(ctx, recovery.Namespace, stuckPod.PodName)
+	if err != nil {
+		stuckPod.Phase = cosmosv1.PodRecoveryPhaseFailed
+		stuckPod.Message = fmt.Sprintf("Failed to get PVC name: %v", err)
+		stuckPod.LastUpdateTime = &now
+
+		recovery.Status.RecoveryHistory = append(recovery.Status.RecoveryHistory, cosmosv1.RecoveryHistoryEntry{
+			Timestamp: now,
+			PodName:   stuckPod.PodName,
+			Height:    stuckPod.StuckAtHeight,
+			EventType: "failed",
+			Message:   fmt.Sprintf("Failed to get PVC: %v", err),
+		})
+
+		return r.Status().Update(ctx, recovery)
+	}
+
+	stuckPod.PVCName = pvcName
+	reporter.Info(fmt.Sprintf("Found PVC %s for pod %s", pvcName, stuckPod.PodName))
+
+	// Decide next phase based on snapshot requirement
+	if recovery.Spec.CreateVolumeSnapshot {
+		stuckPod.Phase = cosmosv1.PodRecoveryPhaseCreatingSnapshot
+		stuckPod.Message = "Creating VolumeSnapshot"
+	} else {
+		stuckPod.Phase = cosmosv1.PodRecoveryPhaseRunningRecovery
+		stuckPod.Message = "Starting recovery script"
+	}
+	stuckPod.LastUpdateTime = &now
+
+	return r.Status().Update(ctx, recovery)
+}
+
+func (r *StuckHeightRecoveryReconciler) handlePodCreatingSnapshot(
+	ctx context.Context,
+	recovery *cosmosv1.StuckHeightRecovery,
+	crd *cosmosv1.CosmosFullNode,
+	stuckPod *cosmosv1.StuckPodRecoveryStatus,
+	reporter kube.EventReporter,
+) error {
+	// Mark pod for deletion in CosmosFullNode status
+	if crd.Status.StuckHeightRecoveryStatus == nil {
+		crd.Status.StuckHeightRecoveryStatus = make(map[string]cosmosv1.StuckHeightRecoveryPodStatus)
+	}
+
+	recoveryKey := fmt.Sprintf("%s-%s", recovery.Name, stuckPod.PodName)
+	if _, exists := crd.Status.StuckHeightRecoveryStatus[recoveryKey]; !exists {
+		crd.Status.StuckHeightRecoveryStatus[recoveryKey] = cosmosv1.StuckHeightRecoveryPodStatus{
+			PodName: stuckPod.PodName,
+		}
+		if err := r.Status().Update(ctx, crd); err != nil {
+			return err
+		}
+		reporter.Info(fmt.Sprintf("Marked pod %s for deletion before snapshot", stuckPod.PodName))
+		return nil
+	}
+
+	// Check if pod is deleted
+	pod := &corev1.Pod{}
+	err := r.Get(ctx, client.ObjectKey{Name: stuckPod.PodName, Namespace: recovery.Namespace}, pod)
+	if err == nil {
+		reporter.Info(fmt.Sprintf("Waiting for pod %s to be deleted", stuckPod.PodName))
+		return nil
+	}
+	if !errors.IsNotFound(err) {
+		return err
+	}
+
+	reporter.Info(fmt.Sprintf("Pod %s deleted, creating snapshot", stuckPod.PodName))
+
+	// Create snapshot
+	snapshotName, err := r.snapshotCreator.CreateSnapshot(ctx, recovery, stuckPod.PVCName)
+	if err != nil {
+		now := metav1.Now()
+		stuckPod.Phase = cosmosv1.PodRecoveryPhaseFailed
+		stuckPod.Message = fmt.Sprintf("Failed to create snapshot: %v", err)
+		stuckPod.LastUpdateTime = &now
+
+		recovery.Status.RecoveryHistory = append(recovery.Status.RecoveryHistory, cosmosv1.RecoveryHistoryEntry{
+			Timestamp: now,
+			PodName:   stuckPod.PodName,
+			Height:    stuckPod.StuckAtHeight,
+			EventType: "failed",
+			Message:   fmt.Sprintf("Snapshot creation failed: %v", err),
+		})
+
+		return r.Status().Update(ctx, recovery)
+	}
+
+	now := metav1.Now()
+	stuckPod.VolumeSnapshotName = snapshotName
+	stuckPod.Phase = cosmosv1.PodRecoveryPhaseWaitingForSnapshot
+	stuckPod.Message = fmt.Sprintf("Waiting for snapshot %s", snapshotName)
+	stuckPod.LastUpdateTime = &now
+
+	reporter.Info(fmt.Sprintf("Created snapshot %s for pod %s", snapshotName, stuckPod.PodName))
+	reporter.RecordInfo("SnapshotCreated", fmt.Sprintf("Created snapshot %s for pod %s", snapshotName, stuckPod.PodName))
+
+	return r.Status().Update(ctx, recovery)
+}
+
+func (r *StuckHeightRecoveryReconciler) handlePodWaitingForSnapshot(
+	ctx context.Context,
+	recovery *cosmosv1.StuckHeightRecovery,
+	stuckPod *cosmosv1.StuckPodRecoveryStatus,
+	reporter kube.EventReporter,
+) error {
+	ready, err := r.snapshotCreator.CheckSnapshotReady(ctx, recovery.Namespace, stuckPod.VolumeSnapshotName)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			// Snapshot deleted, recreate
+			reporter.Info(fmt.Sprintf("Snapshot %s not found, recreating", stuckPod.VolumeSnapshotName))
+			now := metav1.Now()
+			stuckPod.VolumeSnapshotName = ""
+			stuckPod.Phase = cosmosv1.PodRecoveryPhaseCreatingSnapshot
+			stuckPod.Message = "Snapshot was deleted, recreating"
+			stuckPod.LastUpdateTime = &now
+			return r.Status().Update(ctx, recovery)
+		}
+		return err
+	}
+
+	if !ready {
+		reporter.Info(fmt.Sprintf("Snapshot %s not ready yet for pod %s", stuckPod.VolumeSnapshotName, stuckPod.PodName))
+		return nil
+	}
+
+	now := metav1.Now()
+	stuckPod.Phase = cosmosv1.PodRecoveryPhaseRunningRecovery
+	stuckPod.Message = "Snapshot ready, starting recovery"
+	stuckPod.LastUpdateTime = &now
+
+	reporter.Info(fmt.Sprintf("Snapshot %s ready for pod %s", stuckPod.VolumeSnapshotName, stuckPod.PodName))
+	reporter.RecordInfo("SnapshotReady", fmt.Sprintf("Snapshot %s ready for pod %s", stuckPod.VolumeSnapshotName, stuckPod.PodName))
+
+	return r.Status().Update(ctx, recovery)
+}
+
+func (r *StuckHeightRecoveryReconciler) handlePodRunningRecovery(
+	ctx context.Context,
+	recovery *cosmosv1.StuckHeightRecovery,
+	stuckPod *cosmosv1.StuckPodRecoveryStatus,
+	reporter kube.EventReporter,
+) error {
+	// Check if pod is deleted
+	pod := &corev1.Pod{}
+	err := r.Get(ctx, client.ObjectKey{Name: stuckPod.PodName, Namespace: recovery.Namespace}, pod)
+	if err == nil {
+		reporter.Info(fmt.Sprintf("Waiting for pod %s to be deleted before recovery", stuckPod.PodName))
+		return nil
+	}
+	if !errors.IsNotFound(err) {
+		return err
+	}
+
+	reporter.Info(fmt.Sprintf("Pod %s deleted, creating recovery pod", stuckPod.PodName))
+
+	// Create recovery pod
+	recoveryPodName, err := r.recoveryPodBuilder.CreatePod(
+		ctx,
+		recovery,
+		stuckPod.PodName,
+		stuckPod.PVCName,
+		stuckPod.StuckAtHeight,
+	)
+	if err != nil {
+		now := metav1.Now()
+		stuckPod.Phase = cosmosv1.PodRecoveryPhaseFailed
+		stuckPod.Message = fmt.Sprintf("Failed to create recovery pod: %v", err)
+		stuckPod.LastUpdateTime = &now
+
+		recovery.Status.RecoveryHistory = append(recovery.Status.RecoveryHistory, cosmosv1.RecoveryHistoryEntry{
+			Timestamp: now,
+			PodName:   stuckPod.PodName,
+			Height:    stuckPod.StuckAtHeight,
+			EventType: "failed",
+			Message:   fmt.Sprintf("Recovery pod creation failed: %v", err),
+		})
+
+		return r.Status().Update(ctx, recovery)
+	}
+
+	now := metav1.Now()
+	stuckPod.RecoveryPodName = recoveryPodName
+	stuckPod.Phase = cosmosv1.PodRecoveryPhaseWaitingForRecovery
+	stuckPod.Message = fmt.Sprintf("Waiting for recovery pod %s", recoveryPodName)
+	stuckPod.LastUpdateTime = &now
+
+	reporter.Info(fmt.Sprintf("Created recovery pod %s for pod %s", recoveryPodName, stuckPod.PodName))
+	reporter.RecordInfo("RecoveryStarted", fmt.Sprintf("Started recovery pod %s for %s", recoveryPodName, stuckPod.PodName))
+
+	return r.Status().Update(ctx, recovery)
+}
+
+func (r *StuckHeightRecoveryReconciler) handlePodWaitingForRecovery(
+	ctx context.Context,
+	recovery *cosmosv1.StuckHeightRecovery,
+	stuckPod *cosmosv1.StuckPodRecoveryStatus,
+	reporter kube.EventReporter,
+) error {
+	completed, success, err := r.recoveryPodBuilder.CheckPodComplete(ctx, recovery.Namespace, stuckPod.RecoveryPodName)
+	if err != nil {
+		return err
+	}
+
+	if !completed {
+		reporter.Info(fmt.Sprintf("Recovery pod %s still running for pod %s", stuckPod.RecoveryPodName, stuckPod.PodName))
+		return nil
+	}
+
+	now := metav1.Now()
+	if success {
+		stuckPod.Phase = cosmosv1.PodRecoveryPhaseRecovered
+		stuckPod.Message = "Recovery completed successfully"
+		stuckPod.LastUpdateTime = &now
+
+		reporter.Info(fmt.Sprintf("Recovery completed successfully for pod %s", stuckPod.PodName))
+		reporter.RecordInfo("RecoveryComplete", fmt.Sprintf("Recovery completed for pod %s", stuckPod.PodName))
+
+		recovery.Status.RecoveryHistory = append(recovery.Status.RecoveryHistory, cosmosv1.RecoveryHistoryEntry{
+			Timestamp: now,
+			PodName:   stuckPod.PodName,
+			Height:    stuckPod.StuckAtHeight,
+			EventType: "recovered",
+			Message:   "Recovery script executed successfully",
+		})
+	} else {
+		stuckPod.Phase = cosmosv1.PodRecoveryPhaseFailed
+		stuckPod.Message = "Recovery script failed"
+		stuckPod.LastUpdateTime = &now
+
+		reporter.RecordError("RecoveryFailed", fmt.Errorf("recovery failed for pod %s", stuckPod.PodName))
+
+		recovery.Status.RecoveryHistory = append(recovery.Status.RecoveryHistory, cosmosv1.RecoveryHistoryEntry{
+			Timestamp: now,
+			PodName:   stuckPod.PodName,
+			Height:    stuckPod.StuckAtHeight,
+			EventType: "failed",
+			Message:   "Recovery script failed",
+		})
+	}
+
+	return r.Status().Update(ctx, recovery)
+}
+
+func (r *StuckHeightRecoveryReconciler) cleanupCompletedPods(
+	ctx context.Context,
+	recovery *cosmosv1.StuckHeightRecovery,
+	crd *cosmosv1.CosmosFullNode,
+	reporter kube.EventReporter,
+) error {
+	if crd.Status.StuckHeightRecoveryStatus == nil {
+		return nil
+	}
+
+	// Remove completed pods from StuckPods map and CosmosFullNode status
+	for podName, stuckPod := range recovery.Status.StuckPods {
+		if stuckPod.Phase == cosmosv1.PodRecoveryPhaseRecovered ||
+			stuckPod.Phase == cosmosv1.PodRecoveryPhaseHeightRecovered ||
+			stuckPod.Phase == cosmosv1.PodRecoveryPhaseFailed {
+
+			// Remove from CosmosFullNode status
+			recoveryKey := fmt.Sprintf("%s-%s", recovery.Name, podName)
+			delete(crd.Status.StuckHeightRecoveryStatus, recoveryKey)
+
+			// Also try old key format for backward compatibility
+			delete(crd.Status.StuckHeightRecoveryStatus, recovery.Name)
+
+			reporter.Info(fmt.Sprintf("Cleaned up pod %s (phase: %s)", podName, stuckPod.Phase))
+
+			// Remove from StuckPods map
+			delete(recovery.Status.StuckPods, podName)
+		}
+	}
+
+	// Update CosmosFullNode status if we made changes
+	return r.Status().Update(ctx, crd)
+}
+
+func (r *StuckHeightRecoveryReconciler) updateOverallStatus(
+	ctx context.Context,
+	recovery *cosmosv1.StuckHeightRecovery,
+) error {
+	totalPods := len(recovery.Status.StuckPods)
+	if totalPods == 0 {
+		return nil
+	}
+
+	// Count pods in different states
+	recovering := 0
+	recovered := 0
+	failed := 0
+	heightRecovered := 0
+
+	for _, stuckPod := range recovery.Status.StuckPods {
+		switch stuckPod.Phase {
+		case cosmosv1.PodRecoveryPhaseRecovered:
+			recovered++
+		case cosmosv1.PodRecoveryPhaseHeightRecovered:
+			heightRecovered++
+		case cosmosv1.PodRecoveryPhaseFailed:
+			failed++
+		default:
+			recovering++
+		}
+	}
+
+	// Update message
+	recovery.Status.Message = fmt.Sprintf(
+		"Recovery status: %d recovering, %d recovered, %d auto-recovered, %d failed (total: %d)",
+		recovering, recovered, heightRecovered, failed, totalPods,
+	)
+
+	return nil
 }
 
 func (r *StuckHeightRecoveryReconciler) handleHeightStuck(
