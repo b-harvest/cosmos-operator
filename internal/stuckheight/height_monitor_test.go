@@ -10,10 +10,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func ptr[T any](v T) *T {
-	return &v
-}
-
 func TestHeightMonitor_CheckStuckHeight(t *testing.T) {
 	ctx := context.Background()
 
