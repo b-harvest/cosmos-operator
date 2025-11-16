@@ -142,6 +142,16 @@ func (b *RecoveryPodBuilder) BuildPod(
 		Spec: corev1.PodSpec{
 			RestartPolicy:    corev1.RestartPolicyNever,
 			ImagePullSecrets: imagePullSecrets,
+			SecurityContext: &corev1.PodSecurityContext{
+				RunAsUser:           ptr(int64(1025)),
+				RunAsGroup:          ptr(int64(1025)),
+				FSGroup:             ptr(int64(1025)),
+				FSGroupChangePolicy: ptr(corev1.FSGroupChangeOnRootMismatch),
+				RunAsNonRoot:        ptr(true),
+				SeccompProfile: &corev1.SeccompProfile{
+					Type: corev1.SeccompProfileTypeRuntimeDefault,
+				},
+			},
 			Containers: []corev1.Container{
 				{
 					Name:            "recovery",
@@ -209,4 +219,8 @@ func (b *RecoveryPodBuilder) CheckPodComplete(
 	}
 
 	return false, false, nil
+}
+
+func ptr[T any](v T) *T {
+	return &v
 }
