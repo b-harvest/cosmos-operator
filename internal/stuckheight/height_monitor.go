@@ -37,53 +37,173 @@ func NewHeightMonitor(client client.Reader) *HeightMonitor {
 	}
 }
 
-// CheckStuckHeight checks if the height has been stuck for the specified duration
+// PodHeightInfo contains height information for a pod
+type PodHeightInfo struct {
+	PodName string
+	Height  uint64
+}
+
+// HeightCheckResult contains the result of height monitoring
+type HeightCheckResult struct {
+	// Maximum height observed across all pods
+	MaxHeight uint64
+	// Pods that are lagging (>100 blocks behind) but not yet confirmed stuck
+	LaggingPods map[string]uint64
+	// Pods that are newly detected as stuck
+	NewlyStuckPods map[string]uint64
+	// Pods that have recovered (height started moving again)
+	RecoveredPods map[string]uint64
+	// All pods with their current heights
+	AllPodHeights map[string]uint64
+}
+
+// CheckStuckHeight checks all pods for stuck height and recovery
 func (m *HeightMonitor) CheckStuckHeight(
 	ctx context.Context,
 	crd *cosmosv1.CosmosFullNode,
 	recovery *cosmosv1.StuckHeightRecovery,
-) (bool, string, uint64, error) {
+) (*HeightCheckResult, error) {
 	// Get current height from CosmosFullNode status
 	if crd.Status.Height == nil || len(crd.Status.Height) == 0 {
-		return false, "", 0, fmt.Errorf("no height information available")
-	}
-
-	// Find a pod with height information
-	var currentHeight uint64
-	var stuckPodName string
-
-	for podName, height := range crd.Status.Height {
-		currentHeight = height
-		stuckPodName = podName
-		break
-	}
-
-	if currentHeight == 0 {
-		return false, "", 0, fmt.Errorf("height is zero")
+		return nil, fmt.Errorf("no height information available")
 	}
 
 	// Parse stuck duration
 	stuckDuration, err := time.ParseDuration(recovery.Spec.StuckDuration)
 	if err != nil {
-		return false, "", 0, fmt.Errorf("invalid stuck duration: %w", err)
+		return nil, fmt.Errorf("invalid stuck duration: %w", err)
 	}
 
-	// Check if this is a new height or the same as last observed
-	if recovery.Status.LastObservedHeight != currentHeight {
-		// Height changed, not stuck
-		return false, "", currentHeight, nil
+	result := &HeightCheckResult{
+		LaggingPods:    make(map[string]uint64),
+		NewlyStuckPods: make(map[string]uint64),
+		RecoveredPods:  make(map[string]uint64),
+		AllPodHeights:  make(map[string]uint64),
 	}
 
-	// Height hasn't changed, check if stuck duration exceeded
-	if recovery.Status.LastHeightUpdateTime == nil {
-		// First time observing this height
-		return false, "", currentHeight, nil
+	// Find maximum height across all pods
+	var maxHeight uint64
+	for podName, height := range crd.Status.Height {
+		result.AllPodHeights[podName] = height
+		if height > maxHeight {
+			maxHeight = height
+		}
+	}
+	result.MaxHeight = maxHeight
+
+	if maxHeight == 0 {
+		return nil, fmt.Errorf("all pod heights are zero")
 	}
 
-	timeSinceUpdate := time.Since(recovery.Status.LastHeightUpdateTime.Time)
-	if timeSinceUpdate >= stuckDuration {
-		return true, stuckPodName, currentHeight, nil
+	// Check each pod for stuck or recovered state
+	for podName, currentHeight := range crd.Status.Height {
+		existingStuckPod, wasStuck := recovery.Status.StuckPods[podName]
+
+		if wasStuck {
+			// Pod is being tracked - check its phase
+			if existingStuckPod.Phase == cosmosv1.PodRecoveryPhaseLagging {
+				// Pod is still in lagging phase - check if it became stuck
+				if m.isPodStuck(podName, currentHeight, maxHeight, recovery, stuckDuration, existingStuckPod) {
+					result.NewlyStuckPods[podName] = currentHeight
+				} else {
+					// Still lagging
+					result.LaggingPods[podName] = currentHeight
+				}
+			} else if existingStuckPod.Phase == cosmosv1.PodRecoveryPhaseRecovered ||
+				existingStuckPod.Phase == cosmosv1.PodRecoveryPhaseHeightRecovered ||
+				existingStuckPod.Phase == cosmosv1.PodRecoveryPhaseFailed {
+				// Skip pods that have already completed
+				continue
+			} else {
+				// Pod was in recovery phase - check if it has recovered
+				if m.hasHeightRecovered(existingStuckPod, currentHeight, maxHeight) {
+					result.RecoveredPods[podName] = currentHeight
+				}
+			}
+		} else {
+			// Pod was not being tracked - check if it's lagging or became stuck
+			heightDiff := maxHeight - currentHeight
+			if heightDiff >= 100 {
+				// Pod is lagging - start tracking
+				result.LaggingPods[podName] = currentHeight
+			}
+		}
 	}
 
-	return false, "", currentHeight, nil
+	return result, nil
+}
+
+// hasHeightRecovered checks if a previously stuck pod has recovered
+func (m *HeightMonitor) hasHeightRecovered(
+	stuckPod *cosmosv1.StuckPodRecoveryStatus,
+	currentHeight uint64,
+	maxHeight uint64,
+) bool {
+	// Pod has recovered if:
+	// 1. Height has increased from when it was stuck
+	// 2. Height is close to max height (within reasonable range)
+
+	heightIncreased := currentHeight > stuckPod.StuckAtHeight
+	closeToMax := maxHeight-currentHeight < 100 // Within 100 blocks is considered recovered
+
+	return heightIncreased && closeToMax
+}
+
+// isPodStuck checks if a pod's height is stuck
+func (m *HeightMonitor) isPodStuck(
+	podName string,
+	currentHeight uint64,
+	maxHeight uint64,
+	recovery *cosmosv1.StuckHeightRecovery,
+	stuckDuration time.Duration,
+	existingTracking *cosmosv1.StuckPodRecoveryStatus,
+) bool {
+	// A pod is considered stuck if:
+	// 1. Its height is significantly below the max height (>100 blocks)
+	// 2. Its height hasn't changed for the stuck duration
+
+	// Height difference threshold - pod is potentially stuck if more than 100 blocks behind
+	heightDiff := maxHeight - currentHeight
+	if heightDiff < 100 {
+		return false // Not significantly behind
+	}
+
+	// If this pod is not being tracked yet, we can't determine if it's stuck
+	// We need to track it first to see if height changes over time
+	if existingTracking == nil {
+		return false // First observation of this lagging pod
+	}
+
+	// Check if height has changed since we started tracking this pod
+	if existingTracking.CurrentHeight != nil && *existingTracking.CurrentHeight != currentHeight {
+		return false // Height has changed, not stuck
+	}
+
+	// Check if stuck duration has been exceeded since detection
+	if existingTracking.DetectedAt.IsZero() {
+		return false // No detection time recorded
+	}
+
+	timeSinceDetection := time.Since(existingTracking.DetectedAt.Time)
+	return timeSinceDetection >= stuckDuration
+}
+
+// Deprecated: Use CheckStuckHeight instead
+// CheckStuckHeightSingle checks if the height has been stuck (single pod mode for backward compatibility)
+func (m *HeightMonitor) CheckStuckHeightSingle(
+	ctx context.Context,
+	crd *cosmosv1.CosmosFullNode,
+	recovery *cosmosv1.StuckHeightRecovery,
+) (bool, string, uint64, error) {
+	result, err := m.CheckStuckHeight(ctx, crd, recovery)
+	if err != nil {
+		return false, "", 0, err
+	}
+
+	// Return first stuck pod if any
+	for podName, height := range result.NewlyStuckPods {
+		return true, podName, height, nil
+	}
+
+	return false, "", result.MaxHeight, nil
 }

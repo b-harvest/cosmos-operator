@@ -19,6 +19,7 @@ package stuckheight
 import (
 	"context"
 	"fmt"
+	"time"
 
 	cosmosv1 "github.com/b-harvest/cosmos-operator/api/v1"
 	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v6/apis/volumesnapshot/v1"
@@ -46,7 +47,9 @@ func (s *SnapshotCreator) CreateSnapshot(
 	recovery *cosmosv1.StuckHeightRecovery,
 	pvcName string,
 ) (string, error) {
-	snapshotName := fmt.Sprintf("%s-recovery-%d", pvcName, metav1.Now().Unix())
+	// Use human-readable timestamp format: 2025-01-15t10-30-45 (lowercase for RFC 1123)
+	timestamp := time.Now().Format("2006-01-02t15-04-05")
+	snapshotName := fmt.Sprintf("%s-recovery-%s", pvcName, timestamp)
 
 	snapshot := &snapshotv1.VolumeSnapshot{
 		ObjectMeta: metav1.ObjectMeta{

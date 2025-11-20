@@ -20,9 +20,13 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
-    - jsonPath: .status.stuckPodName
-      name: Stuck Pod
+    - jsonPath: .status.message
+      name: Message
+      priority: 1
       type: string
+    - jsonPath: .status.lastObservedHeight
+      name: Max Height
+      type: integer
     - jsonPath: .status.lastRecoveryTime
       name: Last Recovery
       type: date
@@ -1875,7 +1879,7 @@ spec:
                 format: date-time
                 type: string
               lastObservedHeight:
-                description: Last observed height
+                description: Last observed max height across all pods
                 format: int64
                 type: integer
               lastRecoveryTime:
@@ -1893,13 +1897,7 @@ spec:
                 description: Current phase of the recovery process
                 enum:
                 - Monitoring
-                - HeightStuck
-                - CreatingSnapshot
-                - WaitingForSnapshot
-                - RunningRecovery
-                - WaitingForRecovery
-                - RecoveryComplete
-                - RecoveryFailed
+                - Recovering
                 - RateLimited
                 - Suspended
                 type: string
@@ -1912,14 +1910,113 @@ spec:
                   window
                 format: int32
                 type: integer
+              recoveryHistory:
+                description: History of recovery attempts
+                items:
+                  description: RecoveryHistoryEntry records a recovery event
+                  properties:
+                    eventType:
+                      description: Type of event (detected, recovered, failed, height_recovered)
+                      type: string
+                    height:
+                      description: Height at which the event occurred
+                      format: int64
+                      type: integer
+                    message:
+                      description: Human-readable message
+                      type: string
+                    podName:
+                      description: Name of the pod involved
+                      type: string
+                    timestamp:
+                      description: Timestamp of this event
+                      format: date-time
+                      type: string
+                  required:
+                  - eventType
+                  - height
+                  - message
+                  - podName
+                  - timestamp
+                  type: object
+                type: array
               recoveryPodName:
-                description: Name of the recovery pod
+                description: 'Deprecated: Use StuckPods instead. Name of the recovery
+                  pod'
                 type: string
               stuckPodName:
-                description: Name of the stuck pod being recovered
+                description: 'Deprecated: Use StuckPods instead. Name of the stuck
+                  pod being recovered'
                 type: string
+              stuckPodPVCName:
+                description: 'Deprecated: Use StuckPods instead. Name of the PVC for
+                  the stuck pod'
+                type: string
+              stuckPods:
+                additionalProperties:
+                  description: StuckPodRecoveryStatus tracks recovery status for a
+                    single stuck pod
+                  properties:
+                    currentHeight:
+                      description: Current height of this pod (if readable)
+                      format: int64
+                      type: integer
+                    detectedAt:
+                      description: Time when stuck was first detected
+                      format: date-time
+                      type: string
+                    lastUpdateTime:
+                      description: Last update time
+                      format: date-time
+                      type: string
+                    message:
+                      description: Human-readable message for this pod's recovery
+                      type: string
+                    phase:
+                      description: Current recovery phase for this pod
+                      enum:
+                      - Lagging
+                      - Stuck
+                      - Recovering
+                      - CreatingSnapshot
+                      - WaitingForSnapshot
+                      - RunningRecovery
+                      - WaitingForRecovery
+                      - Recovered
+                      - Failed
+                      - HeightRecovered
+                      type: string
+                    podName:
+                      description: Name of the stuck pod
+                      type: string
+                    pvcName:
+                      description: Name of the PVC for this pod
+                      type: string
+                    recoveryPodName:
+                      description: Name of the recovery pod for this pod
+                      type: string
+                    stuckAtHeight:
+                      description: Height at which the pod got stuck
+                      format: int64
+                      type: integer
+                    volumeSnapshotName:
+                      description: Name of the VolumeSnapshot created for this pod
+                      type: string
+                  required:
+                  - detectedAt
+                  - phase
+                  - podName
+                  - pvcName
+                  - stuckAtHeight
+                  type: object
+                description: |-
+                  Status of each stuck pod being recovered
+                  Map key is the pod name
+                type: object
+                x-kubernetes-map-type: granular
               volumeSnapshotName:
-                description: Name of the created VolumeSnapshot (if any)
+                description: 'Deprecated: Use StuckPods instead. Name of the created
+                  VolumeSnapshot (if any)'
                 type: string
             type: object
         type: object

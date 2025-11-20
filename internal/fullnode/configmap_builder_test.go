@@ -430,6 +430,141 @@ func TestBuildConfigMaps(t *testing.T) {
 		})
 	})
 
+	t.Run("halt-height with versions", func(t *testing.T) {
+		crd := defaultCRD()
+		crd.Spec.Replicas = 1
+		crd.Spec.ChainSpec.App.MinGasPrice = "0.001uatom"
+
+		t.Run("single version with SetHaltHeight true", func(t *testing.T) {
+			custom := crd.DeepCopy()
+			custom.Spec.ChainSpec.Versions = []cosmosv1.ChainVersion{
+				{UpgradeHeight: 1000, Image: "v1.0.0", SetHaltHeight: true},
+			}
+			custom.Status.Height = map[string]uint64{"osmosis-0": 900}
+
+			cms, err := BuildConfigMaps(custom, nil)
+			require.NoError(t, err)
+
+			var got map[string]any
+			_, err = toml.Decode(cms[0].Object().Data["app-overlay.toml"], &got)
+			require.NoError(t, err)
+
+			// Should set halt-height to 1000 since current height (900) < upgrade height (1000)
+			require.Equal(t, int64(1000), got["halt-height"])
+		})
+
+		t.Run("at halt-height minus 1 - should remove halt-height", func(t *testing.T) {
+			custom := crd.DeepCopy()
+			custom.Spec.ChainSpec.Versions = []cosmosv1.ChainVersion{
+				{UpgradeHeight: 1000, Image: "v1.0.0", SetHaltHeight: true},
+			}
+			custom.Status.Height = map[string]uint64{"osmosis-0": 999}
+
+			cms, err := BuildConfigMaps(custom, nil)
+			require.NoError(t, err)
+
+			var got map[string]any
+			_, err = toml.Decode(cms[0].Object().Data["app-overlay.toml"], &got)
+			require.NoError(t, err)
+
+			// Should set halt-height to 0 to allow chain to proceed with new image
+			require.Equal(t, int64(0), got["halt-height"])
+		})
+
+		t.Run("single version with SetHaltHeight false", func(t *testing.T) {
+			custom := crd.DeepCopy()
+			custom.Spec.ChainSpec.Versions = []cosmosv1.ChainVersion{
+				{UpgradeHeight: 1000, Image: "v1.0.0", SetHaltHeight: false},
+			}
+			custom.Status.Height = map[string]uint64{"osmosis-0": 900}
+
+			cms, err := BuildConfigMaps(custom, nil)
+			require.NoError(t, err)
+
+			var got map[string]any
+			_, err = toml.Decode(cms[0].Object().Data["app-overlay.toml"], &got)
+			require.NoError(t, err)
+
+			// Should set halt-height to 0 since SetHaltHeight is false
+			require.Equal(t, int64(0), got["halt-height"])
+		})
+
+		t.Run("multiple versions - current height before first upgrade", func(t *testing.T) {
+			custom := crd.DeepCopy()
+			custom.Spec.ChainSpec.Versions = []cosmosv1.ChainVersion{
+				{UpgradeHeight: 1000, Image: "v1.0.0", SetHaltHeight: false},
+				{UpgradeHeight: 2000, Image: "v2.0.0", SetHaltHeight: true},
+			}
+			custom.Status.Height = map[string]uint64{"osmosis-0": 900}
+
+			cms, err := BuildConfigMaps(custom, nil)
+			require.NoError(t, err)
+
+			var got map[string]any
+			_, err = toml.Decode(cms[0].Object().Data["app-overlay.toml"], &got)
+			require.NoError(t, err)
+
+			// Should set halt-height to 0 since first upgrade has SetHaltHeight false
+			require.Equal(t, int64(0), got["halt-height"])
+		})
+
+		t.Run("multiple versions - current height between upgrades", func(t *testing.T) {
+			custom := crd.DeepCopy()
+			custom.Spec.ChainSpec.Versions = []cosmosv1.ChainVersion{
+				{UpgradeHeight: 1000, Image: "v1.0.0", SetHaltHeight: false},
+				{UpgradeHeight: 2000, Image: "v2.0.0", SetHaltHeight: true},
+			}
+			custom.Status.Height = map[string]uint64{"osmosis-0": 1500}
+
+			cms, err := BuildConfigMaps(custom, nil)
+			require.NoError(t, err)
+
+			var got map[string]any
+			_, err = toml.Decode(cms[0].Object().Data["app-overlay.toml"], &got)
+			require.NoError(t, err)
+
+			// Should set halt-height to 2000 since next upgrade has SetHaltHeight true
+			require.Equal(t, int64(2000), got["halt-height"])
+		})
+
+		t.Run("multiple versions - current height after all upgrades", func(t *testing.T) {
+			custom := crd.DeepCopy()
+			custom.Spec.ChainSpec.Versions = []cosmosv1.ChainVersion{
+				{UpgradeHeight: 1000, Image: "v1.0.0", SetHaltHeight: true},
+				{UpgradeHeight: 2000, Image: "v2.0.0", SetHaltHeight: true},
+			}
+			custom.Status.Height = map[string]uint64{"osmosis-0": 2500}
+
+			cms, err := BuildConfigMaps(custom, nil)
+			require.NoError(t, err)
+
+			var got map[string]any
+			_, err = toml.Decode(cms[0].Object().Data["app-overlay.toml"], &got)
+			require.NoError(t, err)
+
+			// Should set halt-height to 0 since all upgrades are completed
+			require.Equal(t, int64(0), got["halt-height"])
+		})
+
+		t.Run("no height status available", func(t *testing.T) {
+			custom := crd.DeepCopy()
+			custom.Spec.ChainSpec.Versions = []cosmosv1.ChainVersion{
+				{UpgradeHeight: 1000, Image: "v1.0.0", SetHaltHeight: true},
+			}
+			// No Status.Height set
+
+			cms, err := BuildConfigMaps(custom, nil)
+			require.NoError(t, err)
+
+			var got map[string]any
+			_, err = toml.Decode(cms[0].Object().Data["app-overlay.toml"], &got)
+			require.NoError(t, err)
+
+			// Should set halt-height to 1000 since height defaults to 0
+			require.Equal(t, int64(1000), got["halt-height"])
+		})
+	})
+
 	test.HasTypeLabel(t, func(crd cosmosv1.CosmosFullNode) []map[string]string {
 		cms, _ := BuildConfigMaps(&crd, nil)
 		labels := make([]map[string]string, 0)
