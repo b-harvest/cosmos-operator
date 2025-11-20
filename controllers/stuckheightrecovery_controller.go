@@ -306,6 +306,12 @@ func (r *StuckHeightRecoveryReconciler) handleRecovering(
 	if err == nil {
 		now := metav1.Now()
 
+		// Update last observed max height
+		if recovery.Status.LastObservedHeight != result.MaxHeight {
+			recovery.Status.LastObservedHeight = result.MaxHeight
+			recovery.Status.LastHeightUpdateTime = &now
+		}
+
 		// Handle newly stuck pods (Lagging → Stuck transition)
 		for podName, stuckHeight := range result.NewlyStuckPods {
 			stuckPod := recovery.Status.StuckPods[podName]
@@ -347,11 +353,24 @@ func (r *StuckHeightRecoveryReconciler) handleRecovering(
 			}
 		}
 
-		// Update lagging pods
+		// Handle lagging pods
 		for podName, laggingHeight := range result.LaggingPods {
 			if stuckPod, exists := recovery.Status.StuckPods[podName]; exists {
+				// Update existing lagging pod
 				stuckPod.CurrentHeight = &laggingHeight
 				stuckPod.LastUpdateTime = &now
+			} else {
+				// Start tracking new lagging pod
+				reporter.Info(fmt.Sprintf("Tracking new lagging pod %s at height %d (max: %d)", podName, laggingHeight, result.MaxHeight))
+				recovery.Status.StuckPods[podName] = &cosmosv1.StuckPodRecoveryStatus{
+					PodName:        podName,
+					StuckAtHeight:  laggingHeight,
+					CurrentHeight:  &laggingHeight,
+					DetectedAt:     now,
+					Phase:          cosmosv1.PodRecoveryPhaseLagging,
+					Message:        fmt.Sprintf("Lagging %d blocks behind max height %d", result.MaxHeight-laggingHeight, result.MaxHeight),
+					LastUpdateTime: &now,
+				}
 			}
 		}
 	}
@@ -411,9 +430,14 @@ func (r *StuckHeightRecoveryReconciler) handleRecovering(
 	if !podsNeedingWork && len(recovery.Status.StuckPods) == 0 {
 		recovery.Status.Phase = cosmosv1.StuckHeightRecoveryPhaseMonitoring
 		recovery.Status.Message = "All pods recovered, returning to monitoring"
-		if err := r.Status().Update(ctx, recovery); err != nil {
-			return ctrl.Result{}, err
-		}
+	}
+
+	// Always update recovery status with all changes (lagging pods, recovered pods, etc.)
+	if err := r.Status().Update(ctx, recovery); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if !podsNeedingWork && len(recovery.Status.StuckPods) == 0 {
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 

@@ -109,6 +109,11 @@ func (m *HeightMonitor) CheckStuckHeight(
 					// Still lagging
 					result.LaggingPods[podName] = currentHeight
 				}
+			} else if existingStuckPod.Phase == cosmosv1.PodRecoveryPhaseRecovered ||
+				existingStuckPod.Phase == cosmosv1.PodRecoveryPhaseHeightRecovered ||
+				existingStuckPod.Phase == cosmosv1.PodRecoveryPhaseFailed {
+				// Skip pods that have already completed
+				continue
 			} else {
 				// Pod was in recovery phase - check if it has recovered
 				if m.hasHeightRecovered(existingStuckPod, currentHeight, maxHeight) {
