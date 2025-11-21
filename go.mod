@@ -7,7 +7,7 @@ toolchain go1.24.2
 require (
 	cosmossdk.io/log v1.2.1
 	cosmossdk.io/store v1.0.0-rc.0
-	github.com/BurntSushi/toml v1.3.2
+	github.com/BurntSushi/toml v1.5.0
 	github.com/cosmos/cosmos-db v1.0.0
 	github.com/go-logr/logr v1.2.4
 	github.com/go-logr/zapr v1.2.4
