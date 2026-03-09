@@ -1,8 +1,6 @@
 module github.com/b-harvest/cosmos-operator
 
-go 1.24.0
-
-toolchain go1.24.2
+go 1.25.0
 
 require (
 	cosmossdk.io/log v1.6.0
@@ -22,7 +20,7 @@ require (
 	go.uber.org/goleak v1.3.0
 	go.uber.org/zap v1.26.0
 	golang.org/x/exp v0.0.0-20250506013437-ce4c2cf36ca6
-	golang.org/x/sync v0.17.0
+	golang.org/x/sync v0.20.0
 	gopkg.in/inf.v0 v0.9.1
 	k8s.io/api v0.25.5
 	k8s.io/apimachinery v0.25.5
